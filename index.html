@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.2</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.3</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -125,8 +125,15 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <div class="card" id="firstRun" style="display:none">
     <b>Welcome.</b> <span class="note">Two demo datasets are ready below so you can try a backtest right now — no connection needed. To install on your iPhone: open this page in Safari → Share → <b>Add to Home Screen</b>.</span>
   </div>
-  <h2>Fetch from Binance</h2>
+  <h2>Fetch market data</h2>
   <div class="card">
+    <label class="f">Exchange</label>
+    <select id="exSel">
+      <option value="binance" selected>Binance — history from ~2017</option>
+      <option value="coinbase">Coinbase — history from ~2015</option>
+      <option value="bitstamp">Bitstamp — BTC history from ~2011</option>
+    </select>
+    <div class="hint" id="exHint"></div>
     <label class="f">Symbol</label>
     <div class="row">
       <select id="symSel" style="flex:1">
@@ -257,7 +264,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <div class="card">
     <button class="btn ghost" id="selfTestBtn" style="margin-top:0">Run connectivity self-test</button>
     <div id="selfTestOut"></div>
-    <p class="hint">Tests whether Binance market data is reachable from <i>this device's</i> browser — the definitive check for live data. Demo data always works offline.</p>
+    <p class="hint">Tests whether Binance, Coinbase and Bitstamp market data are reachable from <i>this device's</i> browser — the definitive check for live data. Demo data always works offline.</p>
   </div>
   <h2>CORS proxy (optional)</h2>
   <div class="card">
@@ -278,7 +285,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.2</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.3</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -1114,46 +1121,99 @@ async function getProxy() { return (await DB.get('settings', 'proxy')) || ''; }
 function classifyFetchError(err, resp) {                                        /* [DR-34] */
   if (resp) {
     if (resp.status === 429 || resp.status === 418) return 'RATE-LIMIT';
-    if (resp.status === 400) return 'BAD-SYMBOL';
+    if (resp.status === 400 || resp.status === 404) return 'BAD-SYMBOL';   /* 404: Coinbase/Bitstamp unknown pair [DR-55] */
     return 'BLOCKED';
   }
   if (!navigator.onLine) return 'NETWORK';
   return 'BLOCKED';
 }
-const ERR_TEXT = {                                                              /* [DR-34] */
+const ERR_TEXT = {                                                              /* [DR-34, DR-55] */
   'NETWORK': 'You appear to be offline. Live data needs a connection — demo datasets still work.',
-  'BLOCKED': 'Binance did not respond to this browser — usually a CORS block or a network filter. A proxy URL in Settings can route around it, or use demo data.',
-  'BAD-SYMBOL': 'Binance does not recognise that symbol. Check the spelling — format is BASE/QUOTE, e.g. BTC/USDT.',
-  'RATE-LIMIT': 'Binance is rate-limiting this device. Wait a minute, then retry.',
-  'EMPTY': 'Binance returned no candles for that symbol and timeframe.',
+  'BLOCKED': 'The exchange did not respond to this browser — usually a CORS block or a network filter. Try another exchange, set a proxy URL in Settings, or use demo data.',
+  'BAD-SYMBOL': 'The exchange does not recognise that symbol. Check the spelling — format is BASE/QUOTE (USDT pairs on Binance, USD on Coinbase/Bitstamp).',
+  'RATE-LIMIT': 'The exchange is rate-limiting this device. Wait a minute, then retry.',
+  'EMPTY': 'The exchange returned no candles for that symbol and timeframe.',
 };
 
-async function fetchREST(symbol, tf, depth, onPage) {
-  const proxy = await getProxy();
-  const sym = symbol.replace('/', '');
-  const tfms = TF_MS[tf];
+/* ---------------- multi-exchange adapters [DR-55] ---------------- */
+const EXCHANGES = {
+  binance: { name: 'Binance', ccxtId: 'binance', symbols: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT'], hint: 'Deep liquidity; history from ~2017. USDT pairs.' },
+  coinbase: { name: 'Coinbase', ccxtId: 'coinbaseexchange', symbols: ['BTC/USD', 'ETH/USD', 'SOL/USD'], hint: 'History from ~2015. USD pairs. 4h candles are built from 1h (slower fetch).' },
+  bitstamp: { name: 'Bitstamp', ccxtId: 'bitstamp', symbols: ['BTC/USD', 'ETH/USD', 'XRP/USD'], hint: 'Oldest history — BTC/USD from ~2011. USD pairs.' },
+};
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function resample(bars, k) {                             // 1h -> 4h OHLC aggregation [DR-55]
+  const out = [], span = k * 36e5;
+  let cur = null;
+  for (const b of bars) {
+    const bucket = Math.floor(b[0] / span) * span;
+    if (!cur || cur[0] !== bucket) { if (cur) out.push(cur); cur = [bucket, b[1], b[2], b[3], b[4], b[5]]; }
+    else { cur[2] = Math.max(cur[2], b[2]); cur[3] = Math.min(cur[3], b[3]); cur[4] = b[4]; cur[5] += b[5]; }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+async function pagedFetch(depth, pageSize, getPage, onPage) {   // generic walk-back pagination
   const out = [];
-  let end = Date.now();
+  let cursor = null;
   while (out.length < depth) {
-    const want = Math.min(PAGE, depth - out.length);
-    const url = proxy + `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${want}&endTime=${end}`;
-    let resp;
-    try { resp = await fetch(url); }
-    catch (err) { throw { cause: classifyFetchError(err, null) }; }
-    if (!resp.ok) throw { cause: classifyFetchError(null, resp) };
-    const rows = await resp.json();
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    const page = rows.map(r => [r[0], +r[1], +r[2], +r[3], +r[4], +r[5]]);
+    const want = Math.min(pageSize, depth - out.length);
+    const page = await getPage(want, cursor);            // ascending [ms,o,h,l,c,v]
+    if (!page || page.length === 0) break;
     out.unshift(...page);
     onPage && onPage(out.length);
-    if (rows.length < want) break;                    // reached history start
-    end = page[0][0] - 1;
+    cursor = page[0][0] - 1;
+    if (page.length < want) break;                       // reached history start
   }
   if (out.length === 0) throw { cause: 'EMPTY' };
-  return { bars: out, source: 'rest' };
+  return out;
 }
-async function fetchCCXT(symbol, tf, depth, onPage) {
-  const ex = new ccxt.binance({ enableRateLimit: true });
+async function fetchREST(exId, symbol, tf, depth, onPage) {
+  const proxy = await getProxy();
+  const get = async (url) => {
+    let resp;
+    try { resp = await fetch(proxy + url); }
+    catch (err) { throw { cause: classifyFetchError(err, null) }; }
+    if (!resp.ok) throw { cause: classifyFetchError(null, resp) };
+    return resp.json();
+  };
+  let bars;
+  if (exId === 'binance') {
+    const sym = symbol.replace('/', '');
+    bars = await pagedFetch(depth, PAGE, async (want, cur) => {
+      const rows = await get(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${want}&endTime=${cur ?? Date.now()}`);
+      return Array.isArray(rows) ? rows.map(r => [r[0], +r[1], +r[2], +r[3], +r[4], +r[5]]) : [];
+    }, onPage);
+  } else if (exId === 'coinbase') {
+    if (tf === '4h') {                                   // no native 4h on Coinbase [DR-55]
+      const oneH = await fetchREST(exId, symbol, '1h', Math.min(depth * 4, HARD_CAP), onPage);
+      return { bars: resample(oneH.bars, 4), source: 'rest' };
+    }
+    const gran = { '15m': 900, '1h': 3600, '1d': 86400 }[tf];
+    const prod = symbol.replace('/', '-');
+    bars = await pagedFetch(depth, 300, async (want, cur) => {
+      const end = cur ?? Date.now();
+      const start = end - want * TF_MS[tf];
+      const rows = await get(`https://api.exchange.coinbase.com/products/${prod}/candles?granularity=${gran}&start=${new Date(start).toISOString()}&end=${new Date(end).toISOString()}`);
+      await sleep(120);                                  // polite: 300-candle pages
+      return Array.isArray(rows) ? rows.map(r => [r[0] * 1000, r[3], r[2], r[1], r[4], r[5]]).sort((a, b) => a[0] - b[0]) : [];
+    }, onPage);
+  } else if (exId === 'bitstamp') {
+    const step = { '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 }[tf];
+    const pair = symbol.replace('/', '').toLowerCase();
+    bars = await pagedFetch(depth, PAGE, async (want, cur) => {
+      const end = Math.floor((cur ?? Date.now()) / 1000);
+      const j = await get(`https://www.bitstamp.net/api/v2/ohlc/${pair}/?step=${step}&limit=${want}&end=${end}`);
+      const rows = j && j.data && j.data.ohlc ? j.data.ohlc : [];
+      return rows.map(r => [(+r.timestamp) * 1000, +r.open, +r.high, +r.low, +r.close, +r.volume]);
+    }, onPage);
+  } else throw { cause: 'EMPTY' };
+  return { bars, source: 'rest' };
+}
+async function fetchCCXT(exId, symbol, tf, depth, onPage) {
+  const Cls = ccxt[EXCHANGES[exId].ccxtId];
+  if (!Cls) throw { cause: 'EMPTY' };
+  const ex = new Cls({ enableRateLimit: true });
   const tfms = TF_MS[tf];
   let since = Date.now() - depth * tfms;
   const out = [];
@@ -1164,7 +1224,6 @@ async function fetchCCXT(symbol, tf, depth, onPage) {
     onPage && onPage(out.length);
     since = page[page.length - 1][0] + tfms;
     if (page.length < PAGE && out.length >= depth) break;
-    if (page.length === 0) break;
   }
   if (out.length === 0) throw { cause: 'EMPTY' };
   return { bars: out, source: 'ccxt' };
@@ -1172,30 +1231,31 @@ async function fetchCCXT(symbol, tf, depth, onPage) {
 
 async function doFetch() {
   const btn = $('#fetchBtn'), status = $('#fetchStatus');
+  const exId = $('#exSel').value, exName = EXCHANGES[exId].name;      /* [DR-55] */
   const selVal = $('#symSel').value;
   const raw = selVal === '__custom' ? $('#symCustom').value : selVal;
   const symbol = normalizeSymbol(raw);
   if (!symbol) {
-    status.innerHTML = `<div class="errline">✕ &nbsp;“${(raw || '(empty)')}” isn’t a valid symbol. Use BASE/QUOTE, e.g. BTC/USDT.</div>`;
+    status.innerHTML = `<div class="errline">✕ &nbsp;“${(raw || '(empty)')}” isn’t a valid symbol. Use BASE/QUOTE, e.g. ${EXCHANGES[exId].symbols[0]}.</div>`;
     return;
   }
   if (selVal === '__custom') $('#symHint').textContent = 'Interpreted as ' + symbol;
   const tf = S.tf, depth = Math.min(HARD_CAP, +$('#depthSel').value);
   btn.disabled = true;
-  status.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; Contacting Binance…</div>`;
-  const onPage = (n) => { status.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; ${n.toLocaleString()} / ${depth.toLocaleString()} candles…</div>`; };
+  status.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; Contacting ${exName}…</div>`;
+  const onPage = (n) => { status.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; ${n.toLocaleString()} / ${depth.toLocaleString()} candles from ${exName}…</div>`; };
   try {
     let res = null;
     if (await loadCcxt(12000)) {
-      try { res = await fetchCCXT(symbol, tf, depth, onPage); }
+      try { res = await fetchCCXT(exId, symbol, tf, depth, onPage); }
       catch (e) { res = null; }                        // fall through to REST [DR-20]
     }
-    if (!res) res = await fetchREST(symbol, tf, depth, onPage);
+    if (!res) res = await fetchREST(exId, symbol, tf, depth, onPage);
     const cleaned = BT.cleanBars(res.bars);            /* [DR-16] */
     if (cleaned.bars.length < 10) throw { cause: 'EMPTY' };
-    const key = `binance|${symbol}|${tf}`;
+    const key = `${exId}|${symbol}|${tf}`;
     await DB.put('datasets', key, {
-      meta: { exchange: 'binance', symbol, tf, fetchedAt: Date.now(), source: res.source, demo: false, dropped: cleaned.dropped },
+      meta: { exchange: exId, symbol, tf, fetchedAt: Date.now(), source: res.source, demo: false, dropped: cleaned.dropped },
       bars: cleaned.bars,
     });
     await selectDataset(key);
@@ -1256,7 +1316,7 @@ async function renderDsList() {
     div.innerHTML = `
       <div class="t"><b>${m.symbol}</b> <span class="sub">· ${m.tf}</span>
         <div class="sub">${rec.bars.length.toLocaleString()} bars · ${fmtDate(rec.bars[0][0])} → ${fmtDate(rec.bars[rec.bars.length - 1][0])}</div></div>
-      <span class="badge ${m.demo ? 'demo' : 'live'}">${m.demo ? 'DEMO · synthetic' : (m.source === 'ccxt' ? 'Binance · ccxt' : 'Binance · REST')}</span>
+      <span class="badge ${m.demo ? 'demo' : 'live'}">${m.demo ? 'DEMO · synthetic' : ((EXCHANGES[m.exchange] ? EXCHANGES[m.exchange].name : m.exchange) + (m.source === 'ccxt' ? ' · ccxt' : ' · REST'))}</span>
       <button class="mini" data-del="${key}">✕</button>`;
     div.addEventListener('click', async (e) => {
       if (e.target.closest('[data-del]')) {
@@ -1895,23 +1955,26 @@ async function selfTest() {
   const results = [];
   const ccxtOK = await loadCcxt(15000);
   results.push(ccxtOK ? line('✓', 'okline', 'ccxt library loaded from CDN') : line('✕', 'errline', 'ccxt CDN unreachable (offline or blocked) — direct REST will be used instead'));
-  let ccxtFetch = false, restFetch = false, restCause = '';
-  if (ccxtOK) {
-    try { const ex = new ccxt.binance(); const d = await ex.fetchOHLCV('BTC/USDT', '1h', undefined, 5); ccxtFetch = Array.isArray(d) && d.length > 0; } catch (e) { ccxtFetch = false; }
-    results.push(ccxtFetch ? line('✓', 'okline', 'Binance reachable via ccxt — live data will work') : line('⚠', 'warnline', 'ccxt loaded but Binance fetch failed (likely CORS) — trying direct REST'));
+  const proxy = await getProxy();
+  const PROBES = {                                                              /* [DR-55] one small REST probe per exchange */
+    binance: 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=2',
+    coinbase: 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600',
+    bitstamp: 'https://www.bitstamp.net/api/v2/ohlc/btcusd/?step=3600&limit=2',
+  };
+  const verdicts = {};
+  for (const [exId, url] of Object.entries(PROBES)) {
+    let okEx = false;
+    try { const r = await fetch(proxy + url); okEx = r.ok; } catch (e) { okEx = false; }
+    verdicts[exId] = okEx;
+    results.push(okEx ? line('✓', 'okline', EXCHANGES[exId].name + ' reachable via direct REST' + (proxy ? ' (through your proxy)' : ''))
+                      : line('✕', 'errline', EXCHANGES[exId].name + ' unreachable from this browser (CORS/network).'));
   }
-  try {
-    const proxy = await getProxy();
-    const r = await fetch(proxy + 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=2');
-    restFetch = r.ok && (await r.json()).length > 0;
-  } catch (e) { restCause = classifyFetchError(e, null); }
-  results.push(restFetch ? line('✓', 'okline', 'Binance reachable via direct REST' + ((await getProxy()) ? ' (through your proxy)' : '')) :
-    line('✕', 'errline', 'Direct REST fetch failed (' + (restCause || 'blocked') + '). ' + (((await getProxy())) ? 'Your proxy did not help — check its URL.' : 'Set a proxy URL above, or use demo data.')));
-  const verdict = (ccxtFetch || restFetch)
-    ? line('✓', 'okline', '<b>Live Binance data works on this device.</b>')
+  const anyOK = Object.values(verdicts).some(Boolean);
+  const verdict = anyOK
+    ? line('✓', 'okline', '<b>Live data works on this device</b> via: ' + Object.keys(verdicts).filter(k => verdicts[k]).map(k => EXCHANGES[k].name).join(', ') + '.')
     : line('⚠', 'warnline', '<b>No live route right now.</b> Demo datasets work fully offline; a proxy may unlock live data.');
   out.innerHTML = results.join('') + verdict;
-  await DB.put('settings', 'selfTest', { ccxtOK, ccxtFetch, restFetch, at: Date.now() });  /* [DR-12 check] */
+  await DB.put('settings', 'selfTest', { ccxtOK, verdicts, at: Date.now() });  /* [DR-12/DR-55 check] */
 }
 
 /* ---------------- boot ---------------- */
@@ -1941,6 +2004,14 @@ async function boot() {
     $('#symHint').textContent = custom ? 'Format: BASE/QUOTE — btcusdt, BTC-USDT and btc/usdt all work.' : '';
     if (custom) $('#symCustom').focus();
   };
+  $('#exSel').onchange = () => {                                                 /* [DR-55] */
+    const ex = EXCHANGES[$('#exSel').value];
+    $('#exHint').textContent = ex.hint;
+    $('#symSel').innerHTML = ex.symbols.map(s => `<option>${s}</option>`).join('') + '<option value="__custom">Custom…</option>';
+    $('#symCustom').style.display = 'none';
+    $('#symHint').textContent = '';
+  };
+  $('#exSel').onchange();
   const VAL_HINTS = {
     split: 'Parameters are fitted on the first 70% and judged on the untouched last 30%. Indicators warm up on pre-window data, so slow MAs trade from day one of the test.',
     wfa: 'The grid is re-optimized 5 times on expanding history; each winner is tested only on the next unseen window. Stitched OOS return + parameter stability = the strongest overfitting test this side of a research paper.',
