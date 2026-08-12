@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.6</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.7</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -307,7 +307,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.6</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.7</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -947,6 +947,32 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const bench = C.c[C.n - 1] / C.c[lead] - 1;                                  // B&H inside the window, close basis [DR-35]
     return { metrics: r.metrics, bench, lead };
   };
+  BT.plateauPick = function (results, sortKey) {                                 /* [DR-59] */
+    if (!results.length) return null;
+    const numKeys = Object.keys(results[0].params).filter(k => typeof results[0].params[k] === 'number');
+    if (numKeys.length !== 2) return results[0];                                 // fallback: argmax
+    const [ka, kb] = numKeys;
+    const byKey = new Map(results.map(r => [`${r.params.type || ''}|${r.params[ka]}|${r.params[kb]}`, r.m[sortKey]]));
+    const as = [...new Set(results.map(r => r.params[ka]))].sort((x, y) => x - y);
+    const bs = [...new Set(results.map(r => r.params[kb]))].sort((x, y) => x - y);
+    const ai = new Map(as.map((v, i) => [v, i])), bi = new Map(bs.map((v, i) => [v, i]));
+    let best = null;
+    for (const r of results) {
+      const a0 = ai.get(r.params[ka]), b0 = bi.get(r.params[kb]);
+      const vals = [];
+      for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) {
+        const a = as[a0 + da], b = bs[b0 + db];
+        if (a === undefined || b === undefined) continue;
+        const v = byKey.get(`${r.params.type || ''}|${a}|${b}`);
+        if (Number.isFinite(v)) vals.push(v);
+      }
+      if (vals.length < 4) continue;                                             // starved edge neighborhoods
+      vals.sort((x, y) => x - y);
+      const score = vals[Math.floor((vals.length - 1) / 2)];                     // neighborhood median
+      if (!best || score > best.score) best = { r, score };
+    }
+    return best ? best.r : results[0];
+  };
   BT.walkForward = function (bars, stratId, grids, opts, nWin, minTrain, onProg) {   /* [DR-45] */
     nWin = nWin || 5; minTrain = minTrain == null ? 0.4 : minTrain;
     const n = bars.length, start = Math.floor(n * minTrain);
@@ -958,7 +984,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       const sw = BT.sweep(bars.slice(0, s), stratId, grids, opts,
         onProg ? (d, t) => onProg(w, d, t) : null);
       if (!sw.results.length) { windows.push(null); continue; }
-      const best = sw.results[0];
+      const best = BT.plateauPick(sw.results, opts.sortKey || 'sharpe');         /* [DR-59] plateau, not argmax */
       const oos = BT.runOOS(bars, s, e, stratId, best.params, opts);
       stitched *= 1 + oos.metrics.totalReturn;
       stitchedBench *= 1 + oos.bench;
@@ -1929,7 +1955,7 @@ async function runSweep() {
         }
         spreadNote = (modal ? `${modal} won ${counts[modal]} of ${wins.length} windows` : 'no MA type dimension') + (spreads.length ? `; winner ranges: ${spreads.join(', ')}` : '');
       }
-      $('#swStatus').textContent = `Walk-forward done in ${secs}s — grid re-optimized ${wf.nWin}× on expanding history, each winner tested on the next unseen window.`;
+      $('#swStatus').textContent = `Walk-forward done in ${secs}s — grid re-fit ${wf.nWin}× on expanding history; each window's PLATEAU pick (best 3×3-neighborhood median, not the raw #1 cell) tested on the next unseen window. [DR-59]`;
       $('#swResults').innerHTML = `
         <div class="card" id="swBench" style="padding:12px 14px">
           <b>Stitched out-of-sample:</b> <span class="${wf.stitched >= 0 ? 'pos' : 'neg'}">${fmtPct(wf.stitched)}</span>
