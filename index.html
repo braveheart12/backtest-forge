@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.3</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.4</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -174,6 +174,28 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <div class="hint" id="stratHint"></div>
     <div id="paramBox"></div>
     <div id="paramWarn"></div>
+  </div>
+  <h2>Regime filters</h2>
+  <div class="card">
+    <p class="note" style="margin-bottom:4px">Optional gates ANDed onto the position signal — when a gate is off-side the strategy stays (or goes) flat. Applied identically in backtests, sweeps and walk-forward.</p>
+    <div class="row" style="margin-top:8px">
+      <button class="mini toggle" id="fSlopeOn" type="button" style="min-width:104px">Slope: off</button>
+      <div style="flex:1"><label class="f" style="margin-top:0">SMA len</label><input type="number" id="fSlopeLen" value="200" min="10" max="400" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">Rising over</label><input type="number" id="fSlopeK" value="20" min="2" max="100" inputmode="numeric"></div>
+    </div>
+    <div class="hint">Only long while the SMA is rising — validated on 2010-26 BTC: cuts deep-bear bleed, costs late entries in V-recoveries.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="mini toggle" id="fAdxOn" type="button" style="min-width:104px">ADX: off</button>
+      <div style="flex:1"><label class="f" style="margin-top:0">ADX len</label><input type="number" id="fAdxLen" value="14" min="5" max="50" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">Min ADX</label><input type="number" id="fAdxMin" value="20" min="10" max="50" inputmode="numeric"></div>
+    </div>
+    <div class="hint">Only trade when trend strength is above the threshold — Wilder's own whipsaw filter.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="mini toggle" id="fVwapOn" type="button" style="min-width:104px">VWAP: off</button>
+      <div style="flex:1"><label class="f" style="margin-top:0">VWAP len</label><input type="number" id="fVwapLen" value="50" min="5" max="400" inputmode="numeric"></div>
+      <div style="flex:1"></div>
+    </div>
+    <div class="hint">Only long above the rolling volume-weighted price — the average holder is in profit.</div>
   </div>
   <h2>Costs &amp; capital</h2>
   <div class="card">
@@ -285,7 +307,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.3</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.4</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -765,6 +787,39 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return out;
   };
 
+  /* ---------- regime filters [DR-56] ---------- */
+  BT.filterWarmup = function (filters) {
+    if (!filters) return 0;
+    let w = 0;
+    if (filters.slope) w = Math.max(w, filters.slope.len + filters.slope.k);
+    if (filters.adx) w = Math.max(w, filters.adx.len * 3);
+    if (filters.vwap) w = Math.max(w, filters.vwap.len);
+    return w;
+  };
+  BT.gateMask = function (C, filters) {
+    if (!filters || (!filters.slope && !filters.adx && !filters.vwap)) return null;
+    const n = C.n, mask = new Int8Array(n).fill(1);
+    if (filters.slope) {
+      const s = sma(C.c, filters.slope.len), k = filters.slope.k;
+      for (let i = 0; i < n; i++) mask[i] &= (i >= k && isFinite(s[i]) && isFinite(s[i - k]) && s[i] - s[i - k] > 0) ? 1 : 0;
+    }
+    if (filters.adx) {
+      const a = adx(C, filters.adx.len);
+      for (let i = 0; i < n; i++) mask[i] &= (isFinite(a[i]) && a[i] > filters.adx.min) ? 1 : 0;
+    }
+    if (filters.vwap) {
+      const v = vwma(C.c, C.v, filters.vwap.len);
+      for (let i = 0; i < n; i++) mask[i] &= (isFinite(v[i]) && C.c[i] > v[i]) ? 1 : 0;
+    }
+    return mask;
+  };
+  BT.andSig = function (sig, mask) {
+    if (!mask) return sig;
+    const out = new Int8Array(sig.length);
+    for (let i = 0; i < sig.length; i++) out[i] = sig[i] & mask[i];
+    return out;
+  };
+
   /* ---------- tearsheet [DR-50] ---------- */
   BT.tearsheet = function (equity, C, barsPerYear, warm, trades, monthly) {
     const n = equity.length, start = Math.min(warm, n - 1);
@@ -834,6 +889,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   BT.sweep = function (bars, stratId, grids, opts, onProgress, shouldStop) {
     const C = bars.n ? bars : colsFromBars(bars);
     const strat = BT.strategy(stratId);
+    const mask = BT.gateMask(C, opts.filters), fWarm = BT.filterWarmup(opts.filters);   /* [DR-56] once per grid */
     const keys = Object.keys(grids);
     const combos = [];
     (function rec(idx, acc) {
@@ -845,8 +901,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       if (shouldStop && shouldStop()) return { results, stopped: true, done: i, total: combos.length };
       const p = combos[i];
       if (p.fast !== undefined && p.slow !== undefined && p.fast >= p.slow) continue; // degenerate
-      const sig = strat.signals(C, p);
-      const r = BT.run(C, sig, { ...opts, warmup: strat.warmup(p) });
+      const sig = BT.andSig(strat.signals(C, p), mask);                          /* [DR-56] */
+      const r = BT.run(C, sig, { ...opts, warmup: Math.max(strat.warmup(p), fWarm) });
       results.push({ params: p, m: r.metrics });
       if (onProgress && (i % 5 === 0)) onProgress(i + 1, combos.length);
     }
@@ -877,9 +933,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   // OOS run with warm-up lead taken from BEFORE the test window [DR-47]
   BT.runOOS = function (bars, from, to, stratId, params, opts) {
     const strat = BT.strategy(stratId);
-    const lead = Math.min(from, strat.warmup(params));
+    const lead = Math.min(from, Math.max(strat.warmup(params), BT.filterWarmup(opts.filters)));   /* [DR-47, DR-56] */
     const C = BT.colsFromBars(bars.slice(from - lead, to));
-    const sig = strat.signals(C, params);
+    const sig = BT.andSig(strat.signals(C, params), BT.gateMask(C, opts.filters));
     const r = BT.run(C, sig, { ...opts, warmup: lead });
     const bench = C.c[C.n - 1] / C.c[lead] - 1;                                  // B&H inside the window, close basis [DR-35]
     return { metrics: r.metrics, bench, lead };
@@ -1008,8 +1064,8 @@ self.onmessage = function (e) {
     if (m.cmd === 'run') {
       const C = BT.colsFromBars(m.bars);
       const strat = BT.strategy(m.stratId);
-      const warm = strat.warmup(m.params);
-      const sig = strat.signals(C, m.params);
+      const warm = Math.max(strat.warmup(m.params), BT.filterWarmup(m.opts.filters));   /* [DR-56] */
+      const sig = BT.andSig(strat.signals(C, m.params), BT.gateMask(C, m.opts.filters));
       const r = BT.run(C, sig, Object.assign({}, m.opts, { warmup: warm }));
       const bench = BT.benchmark(C, m.opts.capital);
       const monthly = BT.monthlyReturns(r.equity, C.ts, warm);
@@ -1404,6 +1460,13 @@ function currentOpts() {                                 /* shared by run + swee
     sizing: $('#sizeMode').value === 'atr'
       ? { mode: 'atr', riskPct: +$('#riskIn').value || 1, atrPeriod: +$('#atrPIn').value || 14, atrMult: +$('#atrMIn').value || 2 }
       : { mode: 'full' },                               /* [DR-53] */
+    filters: (() => {                                    /* [DR-56] */
+      const f = {};
+      if ($('#fSlopeOn').classList.contains('on')) f.slope = { len: +$('#fSlopeLen').value || 200, k: +$('#fSlopeK').value || 20 };
+      if ($('#fAdxOn').classList.contains('on')) f.adx = { len: +$('#fAdxLen').value || 14, min: +$('#fAdxMin').value || 20 };
+      if ($('#fVwapOn').classList.contains('on')) f.vwap = { len: +$('#fVwapLen').value || 50 };
+      return Object.keys(f).length ? f : null;
+    })(),
   };
 }
 async function runBacktest() {
@@ -1602,12 +1665,17 @@ function renderResults() {
         if (o.trailStopPct) bits.push('TS ' + o.trailStopPct + '%');
         if (o.maxDDStopPct) bits.push('CB ' + o.maxDDStopPct + '%');
         const ex = bits.length ? 'exits: ' + bits.join(' / ') : 'exits: none';
+        const fl = o.filters ? ' · filters: ' + [
+          o.filters.slope && `slope(${o.filters.slope.len}/${o.filters.slope.k})`,
+          o.filters.adx && `ADX(${o.filters.adx.len})>${o.filters.adx.min}`,
+          o.filters.vwap && `VWAP(${o.filters.vwap.len})`,
+        ].filter(Boolean).join(' + ') : ' · filters: none';
         if (o.sizing && o.sizing.mode === 'atr') {
           const fr = R.res.trades.map(t => t.frac).filter(Number.isFinite);
           const avg = fr.length ? fr.reduce((a, b) => a + b, 0) / fr.length : 1;
-          return ex + ` · sizing: ATR ${o.sizing.riskPct}% risk (avg position ${(avg * 100).toFixed(0)}% of equity)`;
+          return ex + ` · sizing: ATR ${o.sizing.riskPct}% risk (avg position ${(avg * 100).toFixed(0)}% of equity)` + fl;
         }
-        return ex + ' · sizing: all-in';
+        return ex + ' · sizing: all-in' + fl;
       })()}</div>
     </div>
     <div class="tiles">
@@ -2020,6 +2088,13 @@ async function boot() {
   $('#swVal').onchange = () => { $('#swValHint').textContent = VAL_HINTS[$('#swVal').value]; };
   $('#swVal').onchange();
   $('#sizeMode').onchange = () => { $('#atrBox').style.display = $('#sizeMode').value === 'atr' ? '' : 'none'; };
+  for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP']]) {   /* [DR-56] */
+    $('#' + id).onclick = () => {
+      const b = $('#' + id);
+      b.classList.toggle('on');
+      b.textContent = label + ': ' + (b.classList.contains('on') ? 'ON' : 'off');
+    };
+  }
   $('#selfTestBtn').onclick = selfTest;
   $('#proxySave').onclick = async () => {
     let v = $('#proxyIn').value.trim();
