@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.9</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v5.0</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -363,6 +363,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <div style="flex:1"><label class="f">Max symbols</label><input type="number" id="xsMaxN" value="150" min="10" max="500" step="10" inputmode="numeric"></div>
     </div>
     <label class="f"><input type="checkbox" id="xsDead" checked style="width:auto;min-height:0;margin-right:6px">Include cached graveyard (delisted coins) when available [DR-87]</label>
+    <label class="f"><input type="checkbox" id="xsShort" style="width:auto;min-height:0;margin-right:6px">Short grid — slow ≤ 120, admits coins with ~2.1y+ history instead of ~2.8y [DR-88]</label>
+    <div class="hint">Floor $0 = the genuinely full universe. Note the grid warm-up still sets a history minimum per coin (TEMA needs 3× its slow period) — the short grid halves that at the cost of dropping the 160/200 slow columns, so results from the two grids are separate protocols, not directly comparable.</div>
     <button class="btn" id="xsRunBtn">Fetch universe &amp; run panel</button>
     <button class="btn danger" id="xsCancelBtn" style="display:none">Cancel</button>
     <div class="hint" id="xsStatus"></div>
@@ -478,7 +480,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.9</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v5.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -487,7 +489,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
-  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.9M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v5.0M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
@@ -4110,7 +4112,10 @@ async function runFolio() {
 let xsCancel = false;
 async function runPanelLab() {
   const status = $('#xsStatus');
-  const minVol = (+$('#xsMinVol').value || 5) * 1e6, maxN = Math.min(500, +$('#xsMaxN').value || 150);
+  const mvRaw = parseFloat($('#xsMinVol').value);
+  const minVol = (Number.isFinite(mvRaw) && mvRaw >= 0 ? mvRaw : 5) * 1e6;       /* [DR-88] 0 is a VALID floor — full universe */
+  const maxN = Math.min(1000, +$('#xsMaxN').value || 150);
+  const shortGrid = $('#xsShort').checked;                                       /* [DR-88] young-coin protocol */
   xsCancel = false;
   $('#xsRunBtn').style.display = 'none'; $('#xsCancelBtn').style.display = '';
   $('#xsCancelBtn').onclick = () => { xsCancel = true; };
@@ -4120,10 +4125,12 @@ async function runPanelLab() {
     status.innerHTML = '<span class="spin"></span>&nbsp; Discovering the universe…';
     const disc = await discoverUniverse('binance', minVol, maxN, userExclSet());
     if (!disc || !disc.length) throw new Error('universe discovery returned nothing — lower the volume floor');
+    status.innerHTML = `<span class="spin"></span>&nbsp; ${disc.length} pairs above the floor — scanning…`;   /* [DR-88] show discovery size */
     const tierOf = (i) => i < disc.length / 3 ? 'T1' : (i < 2 * disc.length / 3 ? 'T2' : 'T3');
     worker = makeWorker();
-    await workerCall(worker, { cmd: 'panelStart', cfg: { feePct: +$('#feeIn').value || 0.1 } });
-    let done = 0, fetched = 0, cachedN = 0;
+    await workerCall(worker, { cmd: 'panelStart', cfg: Object.assign({ feePct: +$('#feeIn').value || 0.1 },
+      shortGrid ? { slow: [40, 60, 90, 120] } : {}) });                          /* [DR-88] short grid: warm-up 370 vs 610 */
+    let done = 0, fetched = 0, cachedN = 0, young = 0, fetchFail = 0;
     const failed = [];
     for (let i = 0; i < disc.length; i++) {
       if (xsCancel) break;
@@ -4139,9 +4146,9 @@ async function runPanelLab() {
           bars = cl.bars;
           await DB.put('panel', sym, { sym, bars, fetchedAt: Date.now() });
           fetched++;
-        } catch (e) { failed.push(sym); continue; }
+        } catch (e) { failed.push(sym); fetchFail++; continue; }
       }
-      if (bars.length < 450) { failed.push(sym + ' (young)'); continue; }
+      if (bars.length < (shortGrid ? 500 : 800)) { failed.push(sym + ' (young)'); young++; continue; }   /* [DR-88] */
       await workerCall(worker, { cmd: 'panelAsset', sym, bars, tier: tierOf(i) });
       done++;
     }
@@ -4163,7 +4170,7 @@ async function runPanelLab() {
     const res = await workerCall(worker, { cmd: 'panelFinish' });
     const out = res.out;
     endLab();
-    status.textContent = `${out.nAssets} assets (${deadN} delisted) · ${out.nDays.toLocaleString()} panel days · ${failed.length + out.skipped.length} skipped${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
+    status.textContent = `${disc.length} pairs discovered ≥ $${(minVol / 1e6)}M · ${out.nAssets} entered the panel (${deadN} delisted)${shortGrid ? ' · SHORT grid (slow ≤120, ~2.1y min)' : ''} · ${out.nDays.toLocaleString()} panel days · skipped: ${young} too young, ${out.skipped.length} under the ${shortGrid ? '~770' : '~1,010'}-bar grid minimum, ${fetchFail} unreachable${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
     const fmtT = (x) => (x >= 0 ? '+' : '') + x.toFixed(2);
     $('#xsOut').innerHTML = `
       <div class="card" style="padding:12px 14px">
