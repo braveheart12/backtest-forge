@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.5</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.6</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -450,7 +450,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.5</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.6</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -459,7 +459,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
-  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.5M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.6M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
@@ -1963,6 +1963,41 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     const metrics = BT.metrics(equity, { c: bench, n: T }, 365, warm, [], T - warm);
     return { equity, bench, metrics, warm, turnover, rebalances, wLast: Array.from(w) };
+  };
+
+  /* ---------- transfer test [DR-84] ---------- */
+  // Does a FROZEN config (fitted elsewhere — e.g. on BTC/ETH) actually work on THIS
+  // symbol? Since nothing was fitted here, the whole history is out-of-sample by
+  // construction. Full-history run + 4-segment consistency → evidence grade.
+  //   A = beats B&H in ≥3/4 segments AND t ≥ 1.65 · B = non-negative edge, weaker
+  //   C = too little history to judge · F = loses to B&H (ignore its signals here)
+  BT.transferTest = function (bars, stratId, params, filters, opts) {
+    const strat = BT.strategy(stratId);
+    const warm = Math.max(strat.warmup(params), BT.filterWarmup(filters));
+    const n = bars.length;
+    const usable = n - warm;
+    const o = Object.assign({ feePct: 0.1, capital: 10000, barsPerYear: 365 }, opts, { filters });
+    if (usable < 600) return { grade: 'C', usable, nSeg: 0 };
+    const C = colsFromBars(bars);
+    const sig = BT.applyFilters(C, strat.signals(C, params), filters);
+    const r = BT.run(C, sig, Object.assign({}, o, { warmup: warm }));
+    const bench = C.c[n - 1] / C.c[warm] - 1;
+    const edge = r.metrics.totalReturn - bench;
+    const t = r.metrics.tExcess;
+    const nSeg = 4, segLen = Math.floor(usable / nSeg);
+    let segBeat = 0;
+    const segs = [];
+    for (let s = 0; s < nSeg; s++) {
+      const from = warm + s * segLen, to = (s === nSeg - 1) ? n : from + segLen;
+      try {
+        const oo = BT.runOOS(bars, from, to, stratId, params, o);
+        const beat = oo.metrics.totalReturn > oo.bench;
+        if (beat) segBeat++;
+        segs.push({ ret: oo.metrics.totalReturn, bench: oo.bench, beat });
+      } catch (e) { segs.push(null); }
+    }
+    const grade = edge < 0 ? 'F' : (segBeat >= 3 && t >= 1.65 ? 'A' : 'B');
+    return { grade, edge, t, ret: r.metrics.totalReturn, bench, segBeat, nSeg, segs, usable, warm };
   };
 
   /* ---------- signal state + forward tracking [DR-75] ---------- */
@@ -3731,7 +3766,7 @@ async function runScan() {
     if (scCancelled) break;
     status.innerHTML = `<span class="spin"></span>&nbsp; ${syms[i]} — ${i + 1} / ${syms.length}…`;
     try {
-      const res = await fetchREST(exId, syms[i], '1d', 500, null);
+      const res = await fetchREST(exId, syms[i], '1d', 2000, null);              /* [DR-84] deep history for the transfer test */
       const cleaned = BT.cleanBars(res.bars);
       if (cleaned.bars.length < 260) { errs.push(syms[i] + ' (young listing: ' + cleaned.bars.length + ' bars — needs 260+ for the gate)'); continue; }   /* [DR-78] */
       /* quality + tradeability filters [DR-82] */
@@ -3754,36 +3789,46 @@ async function runScan() {
       for (const p of profs) {
         const cfg = p.current ? currentSetup() : p;
         const filters = p.current ? cfg.opts.filters : p.filters;
-        let st = null, yr = null;
+        let st = null, ev = null;
         try { st = BT.signalState(cleaned.bars, cfg.stratId, cfg.params, filters); } catch (err) { continue; }
-        try {
-          const from = Math.max(1, cleaned.bars.length - 365);
-          const o = BT.runOOS(cleaned.bars, from, cleaned.bars.length, cfg.stratId, cfg.params, { feePct: 0.1, capital: 10000, barsPerYear: 365, filters });
-          yr = { ret: o.metrics.totalReturn, bench: o.bench };
-        } catch (err) { /* not enough history for a fair year window */ }
-        rows.push({ sym: syms[i], prof: p.name, st, yr, maxQ });
+        try { ev = BT.transferTest(cleaned.bars, cfg.stratId, cfg.params, filters, { feePct: 0.1, capital: 10000, barsPerYear: 365 }); } catch (err) { /* short/odd data */ }
+        rows.push({ sym: syms[i], prof: p.name, st, ev, maxQ, cfgLite: { stratId: cfg.stratId, params: cfg.params, filters } });
       }
     } catch (e) { errs.push(syms[i] + ' (' + ((e && e.cause) || 'ERROR') + ')'); }
   }
   $('#scRunBtn').style.display = ''; $('#scCancelBtn').style.display = 'none';
-  const score = (r) => r.st.action ? 0 : (r.st.gate && !r.st.gate.above && Math.abs(r.st.gate.dist) < 0.03 ? 1 : (r.st.pos ? 2 : 3));
-  rows.sort((a, b) => (score(a) - score(b)) || (a.st.barsSince - b.st.barsSince));
+  const sigScore = (r) => r.st.action ? 0 : (r.st.gate && !r.st.gate.above && Math.abs(r.st.gate.dist) < 0.03 ? 1 : (r.st.pos ? 2 : 3));
+  const gradeScore = (r) => ({ A: 0, B: 1, C: 2, F: 3 })[(r.ev && r.ev.grade) || 'C'];
+  rows.sort((a, b) => (gradeScore(a) - gradeScore(b)) || (sigScore(a) - sigScore(b)) || (a.st.barsSince - b.st.barsSince));   /* [DR-84] evidence first */
+  const nA = rows.filter(r => r.ev && r.ev.grade === 'A').length;
+  const nF = rows.filter(r => r.ev && r.ev.grade === 'F').length;
   status.innerHTML = scCancelled ? 'Scan cancelled — partial results below.' :
     `${rows.length} symbol×profile states · universe: ${uniNote}${errs.length ? ' · skipped: ' + errs.join(', ') : ''}. Fresh signals rank first, then near-gate setups, then held positions.`;
   $('#scResults').innerHTML = rows.length ? `
     <div class="card scrollx" style="padding:6px 10px">
-    <table><thead><tr><th>Symbol</th><th>Profile</th><th>Signal</th><th>Gate</th><th>Regime</th><th>1y vs B&amp;H</th><th>Max $</th></tr></thead>
+    <table><thead><tr><th>Symbol</th><th>Profile</th><th>Evidence</th><th>Signal</th><th>Gate</th><th>Regime</th><th>Max $</th></tr></thead>
     <tbody>${rows.map(r => `
-      <tr>
+      <tr class="tap" data-scfg='${JSON.stringify(r.cfgLite)}'>
         <td><b>${r.sym.split('/')[0]}</b></td>
         <td>${r.prof}</td>
+        <td>${(() => {                                                           /* [DR-84] */
+          const ev = r.ev;
+          if (!ev || ev.grade === 'C') return '<span class="note">C · short history</span>';
+          if (ev.grade === 'A') return `<b class="pos">A</b> <span class="note">${ev.segBeat}/${ev.nSeg} segs · t ${fmtNum(ev.t)}</span>`;
+          if (ev.grade === 'F') return `<b class="neg">F — ignore signal</b> <span class="note">${fmtPct(ev.edge)} vs B&amp;H</span>`;
+          return `<b>B</b> <span class="note">${ev.segBeat}/${ev.nSeg} segs · edge ${fmtPct(ev.edge)}</span>`;
+        })()}</td>
         <td>${stateBadge(r.st)}</td>
         <td>${r.st.gate ? '<span class="' + (r.st.gate.above ? 'pos' : 'neg') + '">' + fmtPct(r.st.gate.dist) + '</span>' : '—'}</td>
         <td>${r.st.regime ? REGIME_TAG[r.st.regime] : '—'}</td>
-        <td>${r.yr ? '<span class="' + (r.yr.ret >= r.yr.bench ? 'pos' : 'neg') + '">' + fmtPct(r.yr.ret) + ' / ' + fmtPct(r.yr.bench) + '</span>' : '—'}</td>
         <td>${Number.isFinite(r.maxQ) ? (r.maxQ >= 1e9 ? '$' + (r.maxQ / 1e9).toFixed(1) + 'B' : r.maxQ >= 1e6 ? '$' + (r.maxQ / 1e6).toFixed(1) + 'M' : '$' + (r.maxQ / 1e3).toFixed(0) + 'K') : '—'}</td></tr>`).join('')}</tbody></table>
     </div>
-    <p class="hint">Signal state is computed on ~500 fresh daily candles per symbol. “1y vs B&amp;H” is context, not validation — these profiles were validated on BTC/ETH only [DR-70, DR-72]; treat other symbols as HYPOTHESES until they build a forward record. A gate reading just below 0% is a watchlist candidate: one strong close could unblock entries. [DR-75] <b>Max $</b> = position size costing ≈0.3% in market impact (√-impact model k·σ·√(Q/V) against 24h volume) — beyond it, your own order moves the market; quality filters removed untradeable pairs (vol band, stablecoin-likes, spread &gt;0.5%). [DR-82]${syms.length > 15 ? ` <b>Multiple-comparisons caution:</b> across ${syms.length} symbols, expect ~${Math.max(1, Math.round(syms.length / 25))} fresh cross${Math.round(syms.length / 25) > 1 ? 'es' : ''} on a typical day from luck alone — a fresh signal in a wide scan is a research candidate, never a validated trade. [DR-78]` : ''}</p>` : '';
+    <p class="hint"><b>Evidence = transfer test [DR-84]:</b> each profile was fitted on BTC/ETH only — nothing was ever fitted to these symbols — so running it over an alt's FULL history (~2,000 bars) is out-of-sample by construction. <b class="pos">A</b> = beats B&amp;H in ≥3/4 sub-segments with t ≥ 1.65 (the edge transfers) · <b>B</b> = non-negative edge, weaker consistency · C = too little history · <b class="neg">F = loses to B&amp;H on this symbol — its signals here are anti-information, whatever they say today</b>. Rows rank by evidence first, then signal freshness. Luck line: of ${rows.length} rows, ~${Math.max(1, Math.round(rows.length * 0.03))} would earn grade A by chance alone — ${nA} did${nF ? ` · ${nF} graded F` : ''}. Even grade A is one rung below a forward record: tap a row to load its config, then freeze it from the Today card. These profiles remain HYPOTHESES on non-BTC/ETH symbols until a forward record accrues [DR-70, DR-72, DR-75]. <b>Max $</b> = position size costing ≈0.3% in market impact (√-impact k·σ·√(Q/V) vs 24h volume); quality filters removed untradeable pairs (vol band, stablecoin-likes, spread &gt;0.5%). [DR-82]${syms.length > 15 ? ` <b>Multiple-comparisons caution:</b> across ${syms.length} symbols, expect ~${Math.max(1, Math.round(syms.length / 25))} fresh cross${Math.round(syms.length / 25) > 1 ? 'es' : ''} on a typical day from luck alone. [DR-78]` : ''}</p>` : '';
+  $$('#scResults tr.tap').forEach(tr => tr.onclick = () => {                     /* [DR-84] tap → load config into Strategy */
+    const c = JSON.parse(tr.dataset.scfg);
+    applyFiltersToUI(c.filters);
+    loadParamsIntoStrategy(c.stratId, c.params, 'Screener profile');
+  });
 }
 /* ---------------- Folio: allocator tournament [DR-80] ---------------- */
 const ALLOC_NAMES = { ew: 'Equal weight', invvol: 'Inverse volatility', erc: 'Equal risk (ERC)', rmm: 'Risk-managed momentum' };
