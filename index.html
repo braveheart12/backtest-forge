@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.2</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.3</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -199,13 +199,19 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <div style="flex:1"><label class="f" style="margin-top:0">Length</label><input type="number" id="fSlopeLen" value="50" min="10" max="400" inputmode="numeric"></div>
       <div style="flex:1"><label class="f" style="margin-top:0">Rising over</label><input type="number" id="fSlopeK" value="20" min="2" max="100" inputmode="numeric"></div>
     </div>
-    <div class="hint">Only long while the chosen MA is rising. Evidence (WFA OOS, Binance 2020+): <b>fast HMA/TEMA-50 robustly helps ETH</b> across 5/8/12 windows; no config helped BTC (lone spikes only) — per-asset choice. [DR-65]</div>
+    <div class="hint">Only long while the chosen MA is rising. <b>Evidence warning:</b> a pre-registered cross-era test found NO slope spec that consistently helps — entries under a falling long MA are often bottom-catches, the best trades there are. Helped ETH only in 2020+ era-restricted fits (HMA-50). Treat as a hypothesis to test, not a default. [DR-65, DR-66]</div>
     <div class="row" style="margin-top:10px">
       <button class="mini toggle" id="fAdxOn" type="button" style="min-width:104px">ADX: off</button>
       <div style="flex:1"><label class="f" style="margin-top:0">ADX len</label><input type="number" id="fAdxLen" value="14" min="5" max="50" inputmode="numeric"></div>
       <div style="flex:1"><label class="f" style="margin-top:0">Min ADX</label><input type="number" id="fAdxMin" value="20" min="10" max="50" inputmode="numeric"></div>
     </div>
     <div class="hint">Only trade when trend strength is above the threshold — Wilder's own whipsaw filter.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="mini toggle" id="fLevelOn" type="button" style="min-width:104px">Level: off</button>
+      <div style="flex:1"><label class="f" style="margin-top:0">MA type</label><select id="fLevelType"><option selected>SMA</option><option>EMA</option><option>WMA</option><option>HMA</option><option>RMA</option><option>DEMA</option><option>TEMA</option><option>ZLEMA</option><option>VWMA</option><option>KAMA</option></select></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">Length</label><input type="number" id="fLevelLen" value="200" min="20" max="400" inputmode="numeric"></div>
+    </div>
+    <div class="hint"><b>Faber gate — the only enhancement that passed the pre-registered battery (6/8 cells)</b>: blocks NEW entries while close &lt; MA, never forces exits. BTC: ON, high confidence (mechanism + consistent WFA gains on 15y data). ETH: <b>unresolved</b> — the mechanism holds (+45% vs +6% entry outcomes) but backtests split on window composition; test both ways. [DR-67, DR-68]</div>
     <div class="row" style="margin-top:10px">
       <button class="mini toggle" id="fVwapOn" type="button" style="min-width:104px">VWAP: off</button>
       <div style="flex:1"><label class="f" style="margin-top:0">VWAP len</label><input type="number" id="fVwapLen" value="50" min="5" max="400" inputmode="numeric"></div>
@@ -334,7 +340,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.2</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.3</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -860,7 +866,29 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     if (filters.slope) w = Math.max(w, Math.ceil(filters.slope.len * (MA_WARM_MULT[filters.slope.type || 'SMA'] || 3)) + filters.slope.k);  /* [DR-65] */
     if (filters.adx) w = Math.max(w, filters.adx.len * 3);
     if (filters.vwap) w = Math.max(w, filters.vwap.len);
+    if (filters.level) w = Math.max(w, Math.ceil(filters.level.len * (MA_WARM_MULT[filters.level.type || 'SMA'] || 3)) + 5);  /* [DR-67] */
     return w;
+  };
+  /* level gate (Faber): entry-block unless close > MA — does NOT force exits [DR-67] */
+  BT.levelMask = function (C, filters) {
+    if (!filters || !filters.level) return null;
+    const ma = maOf(filters.level.type || 'SMA', C, filters.level.len), n = C.n, m = new Int8Array(n);
+    for (let i = 0; i < n; i++) m[i] = (isFinite(ma[i]) && C.c[i] > ma[i]) ? 1 : 0;
+    return m;
+  };
+  BT.entryBlock = function (sig, gate) {
+    if (!gate) return sig;
+    const n = sig.length, out = new Int8Array(n);
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      if (sig[i] === 0) pos = 0;
+      else if (pos === 0) pos = gate[i] ? 1 : 0;
+      out[i] = pos;
+    }
+    return out;
+  };
+  BT.applyFilters = function (C, sig, filters) {
+    return BT.entryBlock(BT.andSig(sig, BT.gateMask(C, filters)), BT.levelMask(C, filters));
   };
   BT.gateMask = function (C, filters) {
     if (!filters || (!filters.slope && !filters.adx && !filters.vwap)) return null;
@@ -955,7 +983,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   BT.sweep = function (bars, stratId, grids, opts, onProgress, shouldStop) {
     const C = bars.n ? bars : colsFromBars(bars);
     const strat = BT.strategy(stratId);
-    const mask = BT.gateMask(C, opts.filters), fWarm = BT.filterWarmup(opts.filters);   /* [DR-56] once per grid */
+    const mask = BT.gateMask(C, opts.filters), lvl = BT.levelMask(C, opts.filters), fWarm = BT.filterWarmup(opts.filters);   /* [DR-56, DR-67] once per grid */
     let commonWarm = fWarm;                                                              /* [DR-57] shared window */
     const keys = Object.keys(grids);
     const combos = [];
@@ -969,7 +997,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     for (let i = 0; i < valid.length; i++) {
       if (shouldStop && shouldStop()) return { results, stopped: true, done: i, total: valid.length, commonWarm };
       const p = valid[i];
-      const sig = BT.andSig(strat.signals(C, p), mask);                          /* [DR-56] */
+      const sig = BT.entryBlock(BT.andSig(strat.signals(C, p), mask), lvl);      /* [DR-56, DR-67] */
       const r = BT.run(C, sig, { ...opts, warmup: commonWarm });
       results.push({ params: p, m: r.metrics });
       if (onProgress && (i % 5 === 0)) onProgress(i + 1, valid.length);
@@ -1003,7 +1031,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const strat = BT.strategy(stratId);
     const lead = Math.min(from, Math.max(strat.warmup(params), BT.filterWarmup(opts.filters)));   /* [DR-47, DR-56] */
     const C = BT.colsFromBars(bars.slice(from - lead, to));
-    const sig = BT.andSig(strat.signals(C, params), BT.gateMask(C, opts.filters));
+    const sig = BT.applyFilters(C, strat.signals(C, params), opts.filters);      /* [DR-56, DR-67] */
     const r = BT.run(C, sig, { ...opts, warmup: lead });
     const bench = C.c[C.n - 1] / C.c[lead] - 1;                                  // B&H inside the window, close basis [DR-35]
     return { metrics: r.metrics, bench, lead };
@@ -1172,7 +1200,7 @@ self.onmessage = function (e) {
       const C = BT.colsFromBars(m.bars);
       const strat = BT.strategy(m.stratId);
       const warm = Math.max(strat.warmup(m.params), BT.filterWarmup(m.opts.filters));   /* [DR-56] */
-      const sig = BT.andSig(strat.signals(C, m.params), BT.gateMask(C, m.opts.filters));
+      const sig = BT.applyFilters(C, strat.signals(C, m.params), m.opts.filters);   /* [DR-56, DR-67] */
       const r = BT.run(C, sig, Object.assign({}, m.opts, { warmup: warm }));
       const bench = BT.benchmark(C, m.opts.capital, warm);                       /* [DR-57] same window as strategy */
       const monthly = BT.monthlyReturns(r.equity, C.ts, warm);
@@ -1611,6 +1639,7 @@ function currentOpts() {                                 /* shared by run + swee
       const f = {};
       if ($('#fSlopeOn').classList.contains('on')) f.slope = { type: $('#fSlopeType').value || 'SMA', len: +$('#fSlopeLen').value || 50, k: +$('#fSlopeK').value || 20 };  /* [DR-65] */
       if ($('#fAdxOn').classList.contains('on')) f.adx = { len: +$('#fAdxLen').value || 14, min: +$('#fAdxMin').value || 20 };
+      if ($('#fLevelOn').classList.contains('on')) f.level = { type: $('#fLevelType').value || 'SMA', len: +$('#fLevelLen').value || 200 };  /* [DR-67] */
       if ($('#fVwapOn').classList.contains('on')) f.vwap = { len: +$('#fVwapLen').value || 50 };
       return Object.keys(f).length ? f : null;
     })(),
@@ -1850,6 +1879,7 @@ function renderResults() {
         const ex = bits.length ? 'exits: ' + bits.join(' / ') : 'exits: none';
         const fl = o.filters ? ' · filters: ' + [
           o.filters.slope && `slope(${o.filters.slope.type || 'SMA'} ${o.filters.slope.len}/${o.filters.slope.k})`,
+          o.filters.level && `level(c>${o.filters.level.type || 'SMA'}${o.filters.level.len})`,
           o.filters.adx && `ADX(${o.filters.adx.len})>${o.filters.adx.min}`,
           o.filters.vwap && `VWAP(${o.filters.vwap.len})`,
         ].filter(Boolean).join(' + ') : ' · filters: none';
@@ -2308,7 +2338,7 @@ async function boot() {
   $('#stressBtn').onclick = eraStressTest;
   updateFitFromRef();
 
-  for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP']]) {   /* [DR-56] */
+  for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP'], ['fLevelOn', 'Level']]) {   /* [DR-56, DR-67] */
     $('#' + id).onclick = () => {
       const b = $('#' + id);
       b.classList.toggle('on');
