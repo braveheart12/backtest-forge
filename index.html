@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.3</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.4</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -292,6 +292,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <select id="swVal">
       <option value="split" selected>70/30 split — fit early data, test late data</option>
       <option value="wfa">Walk-forward — 5 windows, re-optimized (most robust)</option>
+      <option value="tour">Class tournament — one walk-forward per MA family (best class, OOS)</option>
       <option value="none">None — in-sample only (least honest)</option>
     </select>
     <div class="hint" id="swValHint"></div>
@@ -340,7 +341,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.3</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.4</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -1003,8 +1004,105 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       if (onProgress && (i % 5 === 0)) onProgress(i + 1, valid.length);
     }
     const key = opts.sortKey || 'sharpe';                                        /* [DR-41] */
-    results.sort((a, b) => ((b.m[key] ?? -Infinity) - (a.m[key] ?? -Infinity)));
-    return { results, stopped: false, done: valid.length, total: valid.length, commonWarm };
+    /* B&H metrics on the SAME common window + per-combo dominance vector [DR-72] */
+    const bStart = Math.min(commonWarm, C.n - 1);
+    const benchEq = BT.benchmark(C, opts.capital ?? 10000, bStart);
+    const benchM = BT.metrics(benchEq, C, opts.barsPerYear ?? 365, bStart, [], C.n - bStart);
+    for (const r of results) r.dom = BT.dominance(r.m, benchM);
+    BT.plateauScores(results, key);
+    if ((opts.rank || 'raw') === 'plateau')                                      /* [DR-72] robust default in app */
+      results.sort((a, b) => ((b.plateau ?? -Infinity) - (a.plateau ?? -Infinity)) || ((b.m[key] ?? -Infinity) - (a.m[key] ?? -Infinity)));
+    else results.sort((a, b) => ((b.m[key] ?? -Infinity) - (a.m[key] ?? -Infinity)));
+    return { results, stopped: false, done: valid.length, total: valid.length, commonWarm, benchM };
+  };
+
+  /* ---------- robust sweep ranking [DR-72] ---------- */
+  // Neighborhood-median score per combo: 3×3 over the two numeric axes, inside the
+  // same MA-type slice, self included. Broad shelves outrank lone spikes [DR-59 generalized].
+  BT.plateauScores = function (results, sortKey) {
+    if (!results.length) return results;
+    const numKeys = Object.keys(results[0].params).filter(k => typeof results[0].params[k] === 'number');
+    if (numKeys.length !== 2) { for (const r of results) { r.plateau = r.m[sortKey]; r.plateauN = 1; } return results; }
+    const [ka, kb] = numKeys;
+    const byKey = new Map(results.map(r => [`${r.params.type || ''}|${r.params[ka]}|${r.params[kb]}`, r.m[sortKey]]));
+    const as = [...new Set(results.map(r => r.params[ka]))].sort((x, y) => x - y);
+    const bs = [...new Set(results.map(r => r.params[kb]))].sort((x, y) => x - y);
+    const ai = new Map(as.map((v, i) => [v, i])), bi = new Map(bs.map((v, i) => [v, i]));
+    for (const r of results) {
+      const a0 = ai.get(r.params[ka]), b0 = bi.get(r.params[kb]);
+      const vals = [];
+      for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) {
+        const a = as[a0 + da], b = bs[b0 + db];
+        if (a === undefined || b === undefined) continue;
+        const v = byKey.get(`${r.params.type || ''}|${a}|${b}`);
+        if (Number.isFinite(v)) vals.push(v);
+      }
+      vals.sort((x, y) => x - y);
+      r.plateau = vals.length ? vals[Math.floor((vals.length - 1) / 2)] : r.m[sortKey];
+      r.plateauN = vals.length;
+    }
+    return results;
+  };
+  // 5-point B&H dominance [DR-72]: return, Sharpe, Sortino, shallower max DD, and
+  // positive excess t-stat — all vs B&H measured on the SAME window [DR-57, DR-62].
+  BT.dominance = function (m, benchM) {
+    let d = 0;
+    if (m.totalReturn > benchM.totalReturn) d++;
+    if (m.sharpe > benchM.sharpe) d++;
+    if (m.sortino > benchM.sortino) d++;
+    if (m.maxDrawdown > benchM.maxDrawdown) d++;
+    if (m.tExcess > 0) d++;
+    return d;
+  };
+  // Per-MA-family stats for fair cross-class comparison [DR-72]: best-by-plateau,
+  // family median, and the family-size-correct luck line E[max | n trials] [DR-46].
+  BT.familyStats = function (results, sortKey) {
+    const fams = new Map();
+    for (const r of results) {
+      const t = r.params.type || 'ALL';
+      if (!fams.has(t)) fams.set(t, []);
+      fams.get(t).push(r);
+    }
+    const rows = [];
+    for (const [t, rs] of fams) {
+      const vals = rs.map(r => r.m[sortKey]).filter(Number.isFinite);
+      if (!vals.length) continue;
+      const sorted = [...vals].sort((a, b) => a - b);
+      const median = sorted[Math.floor((sorted.length - 1) / 2)];
+      let best = rs[0];
+      for (const r of rs) if ((r.plateau ?? r.m[sortKey]) > (best.plateau ?? best.m[sortKey])) best = r;
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const varV = vals.length > 1 ? vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / vals.length : 0;
+      const eMax = BT.expectedMaxSharpe(vals.length, varV);
+      const bestRaw = Math.max(...vals);
+      rows.push({ type: t, n: rs.length, best, median, bestRaw, eMax, deflated: bestRaw - eMax,
+                  maxDom: Math.max(...rs.map(r => r.dom || 0)) });
+    }
+    rows.sort((a, b) => ((b.best.plateau ?? -Infinity) - (a.best.plateau ?? -Infinity)));
+    return rows;
+  };
+  // Class tournament [DR-72]: one walk-forward per MA family, all sharing ONE common
+  // start bar (max grid warm-up across ALL families [DR-57]) so every family faces
+  // identical OOS windows and one B&H figure. The only ranking judged out-of-sample.
+  BT.tournament = function (bars, stratId, grids, opts, nWin, onProg) {
+    nWin = nWin || 5;
+    const n = bars.length;
+    const types = grids.type || [null];
+    const gw = BT.gridWarmup(stratId, grids, opts);
+    const start = Math.min(Math.max(Math.floor(n * 0.25), gw + 250), Math.floor(n * 0.6));  /* [DR-60] */
+    const rows = [];
+    for (let i = 0; i < types.length; i++) {
+      const t = types[i];
+      const g = t ? { ...grids, type: [t] } : grids;
+      const wf = BT.walkForward(bars, stratId, g, opts, nWin, (start + 0.1) / n,
+        onProg ? (w) => onProg(i, types.length, w) : null);
+      const wins = wf.windows.filter(Boolean);
+      rows.push({ type: t || 'ALL', stitched: wf.stitched, bench: wf.stitchedBench,
+                  beat: wins.filter(w => w.oos.totalReturn > w.bench).length, nWin: wins.length,
+                  distinctParams: wf.distinctParams, lastParams: wins.length ? wins[wins.length - 1].params : null });
+    }
+    rows.sort((a, b) => b.stitched - a.stitched);
+    return { rows, start, nWin, oosFrac: (n - start) / n };
   };
 
   /* ---------- validation methodology [DR-45, DR-46, DR-47] ---------- */
@@ -1215,9 +1313,9 @@ self.onmessage = function (e) {
       const t0 = performance.now();
       const split = m.splitPct ? Math.floor(m.bars.length * m.splitPct) : m.bars.length;   /* [DR-42] */
       const isBars = split < m.bars.length ? m.bars.slice(0, split) : m.bars;
-      const sw = BT.sweep(isBars, m.stratId, m.grids, m.opts,
+      const sw = BT.sweep(isBars, m.stratId, m.grids, Object.assign({}, m.opts, { rank: 'plateau' }),   /* [DR-72] robust ranking */
         (done, total) => self.postMessage({ id: m.id, kind: 'progress', done, total }));
-      let results = sw.results.slice(0, 100).map(r => ({ params: r.params, m: r.m }));
+      let results = sw.results.slice(0, 100).map(r => ({ params: r.params, m: r.m, plateau: r.plateau, plateauN: r.plateauN, dom: r.dom }));
       if (split < m.bars.length) {                       // OOS pass with pre-window warm-up lead [DR-42, DR-47]
         results = results.map(r => {
           try { return { params: r.params, m: r.m, oos: BT.runOOS(m.bars, split, m.bars.length, m.stratId, r.params, m.opts).metrics }; }
@@ -1244,7 +1342,16 @@ self.onmessage = function (e) {
         heat = { axes: numKeys, sortKey: m.opts.sortKey || 'sharpe',
                  cells: sw.results.map(r => [r.params.type || '', r.params[numKeys[0]], r.params[numKeys[1]], r.m[m.opts.sortKey || 'sharpe']]) };
       }
-      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, ms: performance.now() - t0 });
+      const famStats = BT.familyStats(sw.results, skey).map(f => ({                /* [DR-72] fair per-class stats */
+        type: f.type, n: f.n, median: f.median, bestRaw: f.bestRaw, eMax: f.eMax, deflated: f.deflated,
+        maxDom: f.maxDom, bestParams: f.best.params, bestPlateau: f.best.plateau, bestDom: f.best.dom }));
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, famStats, benchM: sw.benchM, ms: performance.now() - t0 });
+    } else if (m.cmd === 'tour') {                        /* [DR-72] per-family WFA, common windows */
+      const t0 = performance.now();
+      const nW = m.nWin || 5;
+      const tour = BT.tournament(m.bars, m.stratId, m.grids, m.opts, nW,
+        (fi, nF, w) => self.postMessage({ id: m.id, kind: 'progress', done: fi * nW + w + 1, total: nF * nW }));
+      self.postMessage({ id: m.id, ok: true, kind: 'tour', tour, ms: performance.now() - t0 });
     } else if (m.cmd === 'wfa') {                        /* [DR-45, DR-60] */
       const t0 = performance.now();
       const nW = m.nWin || 5;
@@ -2120,6 +2227,38 @@ async function runSweep() {
   const METRIC_LABEL = { ir: 'IR vs B&H', sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
   const fmtM = (key, v) => v == null ? '—' : (key === 'totalReturn' || key === 'cagr') ? fmtPct(v) : fmtNum(v);
   try {
+    if (valMode === 'tour') {                                                    /* [DR-72] class tournament */
+      const nWin = +$('#swWin').value || 5;
+      const nTypes = g.grids.type ? g.grids.type.length : 1;
+      const res = await workerCall(S.sweepWorker, { cmd: 'tour', bars: swBars, stratId, grids: g.grids, opts, nWin },
+        (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `Tournament: family ${Math.min(nTypes, Math.floor((done - 1) / nWin) + 1)} of ${nTypes}, window ${((done - 1) % nWin) + 1} of ${nWin}…`; });
+      if (cancelled) return;
+      endSweep();
+      const tour = res.tour, secs = ((performance.now() - t0) / 1000).toFixed(1);
+      const bench = tour.rows.length ? tour.rows[0].bench : 0;
+      const champs = tour.rows.filter(r => r.stitched > bench);
+      $('#swStatus').textContent = `Tournament done in ${secs}s — each family got its own walk-forward (${nWin} windows, plateau picks), all sharing identical OOS windows and one B&H. This ranking is judged OUT-OF-SAMPLE — the only cross-class comparison worth trusting. [DR-72]`;
+      $('#swResults').innerHTML = `
+        <div class="card" id="swBench" style="padding:12px 14px">
+          <b>Class tournament — stitched out-of-sample.</b> Buy &amp; Hold over the same windows:
+          <span class="${bench >= 0 ? 'pos' : 'neg'}">${fmtPct(bench)}</span>.
+          <div class="hint">${champs.length ? champs.length + ' of ' + tour.rows.length + ' families beat holding out-of-sample.' : 'No family beat holding out-of-sample — on this data, B&H wins. That is a finding, not a failure.'}
+          With ${tour.rows.length} families competing, expect ~${Math.max(1, Math.round(tour.rows.length * 0.1))} lucky-looking leader(s) even under no edge — trust families that also win most windows, not just the total. [DR-46]</div>
+        </div>
+        <div class="card scrollx" style="padding:6px 10px">
+        <table><thead><tr><th>Family</th><th>Stitched OOS</th><th>Windows beat B&amp;H</th><th>Stability</th><th>Last winner</th></tr></thead>
+        <tbody>${tour.rows.map(r => `
+          <tr class="tap"${r.lastParams ? ` data-p='${JSON.stringify(r.lastParams)}'` : ''}>
+            <td><b>${r.type}</b></td>
+            <td class="${r.stitched >= 0 ? 'pos' : 'neg'}">${fmtPct(r.stitched)}${r.stitched > r.bench ? ' ✓' : ''}</td>
+            <td>${r.beat} / ${r.nWin}</td>
+            <td>${r.distinctParams === 1 ? 'same params every window' : r.distinctParams + ' param sets'}</td>
+            <td>${r.lastParams ? Object.entries(r.lastParams).map(([k, v]) => k === 'type' ? v : v).join('/') : '—'}</td></tr>`).join('')}</tbody></table>
+        </div>
+        <p class="hint">✓ = beat Buy &amp; Hold out-of-sample. Every family faces the SAME test windows (one common warm-up across all families [DR-57]), so these numbers are directly comparable. Tap a row to load that family's most recent winning parameters. A family that wins the stitched total but loses most windows rode one lucky segment.</p>`;
+      $$('#swResults tr.tap[data-p]').forEach(tr => tr.onclick = () => loadParamsIntoStrategy(stratId, JSON.parse(tr.dataset.p), 'Tournament family winner'));
+      return;
+    }
     if (valMode === 'wfa') {                                                     /* [DR-45] */
       const nWin = +$('#swWin').value || 5;                                      /* [DR-60] */
       const res = await workerCall(S.sweepWorker, { cmd: 'wfa', bars: swBars, stratId, grids: g.grids, opts, nWin },
@@ -2186,15 +2325,18 @@ async function runSweep() {
     const beatsOOS = (r) => r.oos != null && res.benchOOS != null && r.oos.totalReturn > res.benchOOS;
     const beats = (r) => useOOS ? (beatsIS(r) && beatsOOS(r)) : beatsIS(r);
     const nIS = res.results.filter(beatsIS).length, nBoth = res.results.filter(beats).length;
-    $('#swStatus').textContent = `${res.results.length} valid results in ${secs}s — ranked by ${lbl}${useOOS ? ' on the first 70%; “OOS” columns show the untouched last 30%' : ''}. Degenerate combos (fast ≥ slow) skipped.`;
-    let filterOn = false;
+    $('#swStatus').textContent = `${res.results.length} valid results in ${secs}s — ranked by PLATEAU ${lbl} (each combo scored by the median of its 3×3 parameter neighborhood, so broad robust regions outrank lone lucky spikes [DR-59, DR-72])${useOOS ? '; fitted on the first 70%, “OOS” columns show the untouched last 30%' : ''}. Degenerate combos (fast ≥ slow) skipped.`;
+    let filterOn = false, domOn = false;
     const renderSwTable = () => {
-      const shown = (filterOn ? res.results.filter(beats) : res.results).slice(0, 50);
+      const pool = res.results.filter(r => (!filterOn || beats(r)) && (!domOn || r.dom === 5));
+      const shown = pool.slice(0, 50);
+      const nDom = res.results.filter(r => r.dom === 5).length;
       $('#swResults').innerHTML = `
       <div class="card" id="swBench" style="padding:12px 14px">
         <b>Buy &amp; Hold same window${useOOS ? 's' : ''}:</b>
-        <span class="${res.benchIS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchIS)}</span> in-sample${useOOS ? ` · <span class="${res.benchOOS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchOOS)}</span> out-of-sample` : ''}.
+        <span class="${res.benchIS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchIS)}</span> in-sample${useOOS ? ` · <span class="${res.benchOOS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchOOS)}</span> out-of-sample` : ''}${res.benchM ? ` · B&amp;H Sharpe ${fmtNum(res.benchM.sharpe)} · max DD ${fmtPctU(res.benchM.maxDrawdown)}` : ''}.
         <div class="hint">${nIS} of ${res.results.length} combos beat it in-sample${useOOS ? `; <b>${nBoth} beat it in both windows</b> — those are the only ones worth a second look` : ''}. ✓ = beat B&amp;H; <b>✓✓ = beat it with t ≥ 1.65</b> — statistically meaningful outperformance, not one lucky window (strategy returns pay fees, B&amp;H doesn’t — the harder test). [DR-62]</div>
+        <div class="hint" style="margin-top:6px"><b>Dom</b> = how many of 5 pre-registered checks the combo wins vs same-window B&amp;H: return, Sharpe, Sortino, shallower max drawdown, positive excess t-stat. <b>${nDom}</b> combo${nDom === 1 ? '' : 's'} dominate on all 5. [DR-72]</div>
         ${(() => {                                                               /* [DR-46] */
           const ts = res.trialStats || {};
           const expMax = BT.expectedMaxSharpe(ts.n, ts.varSharpe);
@@ -2205,16 +2347,33 @@ async function runSweep() {
                   : '<b class="neg">below what luck alone would produce</b>';
           return `<div class="hint" style="margin-top:6px">Selection-bias check: testing ${ts.n.toLocaleString()} combos, pure luck would be expected to yield a best in-sample ${lbl} of ~${expMax.toFixed(2)}. Your best is ${top.toFixed(2)} — ${v}. [DR-46, DR-62]</div>`;
         })()}
-        <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button" style="margin-top:8px">${filterOn ? `Showing only B&amp;H beaters (${useOOS ? nBoth : nIS})` : 'Show only combos that beat Buy & Hold'}</button>
+        <div class="row" style="margin-top:8px;flex-wrap:wrap">
+          <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button">${filterOn ? `Showing only B&amp;H beaters` : 'Only B&H beaters'}</button>
+          <button class="mini toggle${domOn ? ' on' : ''}" id="swDomF" type="button">${domOn ? `Showing only 5/5 dominant (${nDom})` : 'Only 5/5 dominant'}</button>
+        </div>
       </div>
-      ${shown.length === 0 ? '<div class="empty"><p>Nothing beat Buy &amp; Hold' + (useOOS ? ' in both windows' : '') + ' — on this data, holding wins. That is a finding, not a failure.</p></div>' : `
+      ${res.famStats && res.famStats.length > 1 ? `
+      <h2>MA family leaderboard <span style="text-transform:none;letter-spacing:0">(in-sample ${lbl}, fair per-class stats)</span></h2>
       <div class="card scrollx" style="padding:6px 10px">
-      <table><thead><tr><th>Params</th><th>${lbl}</th><th>Return</th>${useOOS ? `<th>OOS ${lbl}</th><th>OOS Ret</th>` : '<th>Max DD</th>'}<th>Trades</th></tr></thead>
+      <table><thead><tr><th>Family</th><th>Best ⌀</th><th>Median</th><th>Deflated</th><th>Dom</th></tr></thead>
+      <tbody>${res.famStats.map(f => `
+        <tr class="tap" data-p='${JSON.stringify(f.bestParams)}'>
+          <td><b>${f.type}</b> <span class="note">×${f.n}</span></td>
+          <td><b style="color:var(--ink)">${fmtM(sortKey, f.bestPlateau)}</b> <span class="note">${Object.entries(f.bestParams).filter(([k]) => k !== 'type').map(([, v]) => v).join('/')}</span></td>
+          <td>${fmtM(sortKey, f.median)}</td>
+          <td class="${f.deflated > 0 ? 'pos' : 'neg'}">${fmtM(sortKey, f.deflated)}</td>
+          <td class="${f.maxDom === 5 ? 'pos' : ''}">${f.maxDom}/5</td></tr>`).join('')}</tbody></table>
+      <p class="hint">Best ⌀ = the family's top 3×3-neighborhood median (its plateau, not its lucky spike). <b>Deflated</b> = the family's best raw ${lbl} minus what pure selection luck across its ${'combos'} would be expected to produce [DR-46] — <b>negative means the family peak is within luck</b>. Comparing raw bests across families of different sizes is biased; medians and deflated bests are the fair columns. This table is still in-sample — for a class ranking judged out-of-sample, switch validation to <b>Class tournament</b>. Tap a row to load that family's plateau-best. [DR-72]</p>
+      </div>` : ''}
+      ${shown.length === 0 ? '<div class="empty"><p>' + (domOn || filterOn ? 'No combo passes the active filter' + (domOn ? ' (5/5 dominance is a hard bar)' : '') : 'Nothing beat Buy &amp; Hold' + (useOOS ? ' in both windows' : '')) + ' — on this data, holding wins. That is a finding, not a failure.</p></div>' : `
+      <div class="card scrollx" style="padding:6px 10px">
+      <table><thead><tr><th>Params</th><th>${lbl} ⌀·raw</th><th>Return</th><th>Dom</th>${useOOS ? `<th>OOS ${lbl}</th><th>OOS Ret</th>` : '<th>Max DD</th>'}<th>Trades</th></tr></thead>
       <tbody>${shown.map(r => `
         <tr class="tap" data-p='${JSON.stringify(r.params)}'>
           <td>${Object.entries(r.params).map(([k, v]) => (k === 'type' ? v : k + ' ' + v)).join(' · ')}</td>
-          <td><b style="color:var(--ink)">${fmtM(sortKey, r.m[sortKey])}</b></td>
+          <td><b style="color:var(--ink)">${fmtM(sortKey, r.plateau)}</b> <span class="note">${fmtM(sortKey, r.m[sortKey])}</span></td>
           <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}${beatsIS(r) ? ' ✓' : ''}</td>
+          <td class="${r.dom === 5 ? 'pos' : ''}"><b>${r.dom}/5</b></td>
           ${useOOS ? `<td>${fmtM(sortKey, r.oos && r.oos[sortKey])}</td>
           <td class="${r.oos && r.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${r.oos ? fmtPct(r.oos.totalReturn) + (beatsOOS(r) ? (r.oos.tExcess >= 1.65 ? ' ✓✓' : ' ✓') : '') : '—'}</td>`
           : `<td class="neg">${fmtPctU(r.m.maxDrawdown)}</td>`}
@@ -2227,11 +2386,12 @@ async function runSweep() {
         <canvas class="heat" id="heatCv"></canvas>
         <p class="hint">Blue = positive, red = negative, deeper = stronger; white ring = best cell. Trust broad bright <b>regions</b> (plateaus), not lone bright cells. Tap a cell to load its parameters.</p>
       </div>` : ''}
-      <p class="hint">${useOOS
+      <p class="hint">Rows are ranked by the <b>⌀ (plateau)</b> value — the median of each combo's 3×3 parameter neighborhood — because raw #1 cells are usually luck [DR-59]; the raw value is shown small beside it. ${useOOS
         ? 'In-sample columns are the fit; <b>OOS columns are the honest test</b> — parameters that shine in-sample but collapse out-of-sample are overfit. Tap a row to load its parameters.'
-        : 'Tap a row to load its parameters. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting). Turn on the out-of-sample check for an honest test.'}
+        : 'Tap a row to load its parameters. Careful: even a plateau-ranked top row is a <i>past</i> fit — turn on the out-of-sample check or the Class tournament for an honest test.'}
       All rows and the B&amp;H line share ONE evaluation window starting after the grid’s longest warm-up — a single backtest of the same parameters uses its own (often shorter) warm-up, so its numbers can differ slightly from the row. [DR-57]</p>`;
       $('#swFilter').onclick = () => { filterOn = !filterOn; renderSwTable(); };
+      $('#swDomF').onclick = () => { domOn = !domOn; renderSwTable(); };         /* [DR-72] */
       wireSwRows();
       drawHeatmap(res, stratId, lbl);                    /* [DR-51] */
     };
@@ -2312,11 +2472,12 @@ async function boot() {
   const VAL_HINTS = {
     split: 'Parameters are fitted on the first 70% and judged on the untouched last 30%. Indicators warm up on pre-window data, so slow MAs trade from day one of the test.',
     wfa: 'The grid is re-optimized 5 times on expanding history; each winner is tested only on the next unseen window. Stitched OOS return + parameter stability = the strongest overfitting test this side of a research paper.',
+    tour: 'One walk-forward per MA family, all sharing identical out-of-sample windows — the only fair way to crown a best indicator CLASS. Slow (a full WFA per family) but judged entirely out-of-sample. [DR-72]',
     none: 'Every result is an in-sample fit. Fine for exploring, meaningless as evidence.',
   };
   $('#swVal').onchange = () => {
     $('#swValHint').textContent = VAL_HINTS[$('#swVal').value];
-    $('#swWinBox').style.display = $('#swVal').value === 'wfa' ? '' : 'none';    /* [DR-60] */
+    $('#swWinBox').style.display = ($('#swVal').value === 'wfa' || $('#swVal').value === 'tour') ? '' : 'none';    /* [DR-60, DR-72] */
   };
   $('#swVal').onchange();
   $('#sizeMode').onchange = () => { $('#atrBox').style.display = $('#sizeMode').value === 'atr' ? '' : 'none'; };
