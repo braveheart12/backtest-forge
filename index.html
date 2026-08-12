@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.7</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.0</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -255,6 +255,26 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn" id="runBtn">Run backtest</button>
     <div id="runStatus"></div>
   </div>
+
+  <h2>Robustness — same config, every dataset</h2>
+  <div class="card">
+    <div class="hint">Runs the CURRENT config (strategy, filters, exits, sizing, fit-from date) on every stored dataset. A real edge agrees across exchanges and history depths; divergence is an era or venue tell. [DR-77]</div>
+    <button class="btn ghost" id="robustBtn">Run on all stored datasets</button>
+    <div id="robustOut"></div>
+  </div>
+
+  <h2>Config library</h2>
+  <div class="card">
+    <div class="hint">Named configs — strategy, parameters, filters, exits, sizing — saved on this device. Export as JSON for backup or another device; freezing for a forward record stays on the Radar tab. [DR-77]</div>
+    <button class="btn ghost" id="libSaveBtn">Save current config…</button>
+    <div id="libList" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="libExpBtn">Export all (JSON)</button>
+      <button class="mini" id="libImpBtn">Import JSON</button>
+      <input type="file" id="libImpInp" accept=".json,application/json" style="display:none">
+    </div>
+    <div class="hint" id="libHint"></div>
+  </div>
 </section>
 
 <!-- ================= RESULTS ================= -->
@@ -328,6 +348,18 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <option value="coinbase">Coinbase (USD majors)</option>
       <option value="bitstamp">Bitstamp (USD majors)</option>
     </select>
+    <label class="f">Universe</label>
+    <select id="scUni">
+      <option value="majors" selected>Majors — curated list</option>
+      <option value="volume">Volume-ranked — every pair above a liquidity floor</option>
+    </select>
+    <div id="scVolBox" style="display:none">
+      <div class="row">
+        <div style="flex:1"><label class="f">Min 24h volume ($M)</label><input type="number" id="scMinVol" value="25" min="1" step="5" inputmode="numeric"></div>
+        <div style="flex:1"><label class="f">Max symbols</label><input type="number" id="scMaxN" value="30" min="5" max="60" step="5" inputmode="numeric"></div>
+      </div>
+      <div class="hint">One bulk ticker call discovers every USDT/USD pair above the floor (leveraged tokens and stablecoins excluded). Coinbase has no bulk-volume endpoint — it falls back to the curated list. Wider universe = more chance signals: expect roughly one fresh cross per ~25 symbols on any given day from luck alone. [DR-78]</div>
+    </div>
     <label class="f">Extra symbols (optional, comma-separated)</label>
     <input type="text" id="scExtra" placeholder="e.g. ARB/USDT, OP/USDT" autocapitalize="characters">
     <label class="f">Profiles to scan</label>
@@ -372,7 +404,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.7</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -1062,6 +1094,18 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const var95 = sorted.length ? sorted[vi] : 0;
     const tail = sorted.slice(0, vi + 1);
     const cvar95 = tail.length ? tail.reduce((a, b) => a + b, 0) / tail.length : 0;
+    // Ulcer index / UPI / Omega / tail ratio [DR-76]
+    let uw2 = 0, uwN = 0;
+    for (let i = start; i < n; i++) { uw2 += uw[i] * uw[i]; uwN++; }
+    const ulcer = uwN ? Math.sqrt(uw2 / uwN) : 0;
+    const yearsT = (n - 1 - start) / barsPerYear;
+    const cagrT = yearsT > 0 ? Math.pow(equity[n - 1] / equity[start], 1 / yearsT) - 1 : 0;
+    const upi = ulcer > 1e-9 ? cagrT / ulcer : (cagrT > 0 ? Infinity : 0);
+    let posS = 0, negS = 0;
+    for (const r of rets) { if (r > 0) posS += r; else negS -= r; }
+    const omega = negS > 1e-12 ? posS / negS : (posS > 0 ? Infinity : 0);
+    const q95v = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] : 0;
+    const tailRatio = (sorted.length && Math.abs(sorted[vi]) > 1e-12) ? Math.abs(q95v) / Math.abs(sorted[vi]) : 0;
     // Kelly + streaks + expectancy
     const closed = (trades || []).filter(t => !t.open);
     const wins = closed.filter(t => t.ret > 0), losses = closed.filter(t => t.ret <= 0);
@@ -1083,6 +1127,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     return { rollSharpe: Array.from(rollSharpe), rollWindow: W, underwater: Array.from(uw),
              topDrawdowns: dds.slice(0, 5), var95, cvar95, kelly,
+             ulcer, upi, omega, tailRatio,                                       /* [DR-76] */
              maxWinStreak, maxLossStreak, expectancy, bestMonth, worstMonth };
   };
 
@@ -1106,7 +1151,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       const p = valid[i];
       const sig = BT.entryBlock(BT.andSig(strat.signals(C, p), mask), lvl);      /* [DR-56, DR-67] */
       const r = BT.run(C, sig, { ...opts, warmup: commonWarm });
-      results.push({ params: p, m: r.metrics });
+      const entry = { params: p, m: r.metrics };
+      if (opts.pboBlocks) entry.blocks = BT.blockMoments(r.equity, commonWarm, opts.pboBlocks);   /* [DR-76] */
+      results.push(entry);
       if (onProgress && (i % 5 === 0)) onProgress(i + 1, valid.length);
     }
     const key = opts.sortKey || 'sharpe';                                        /* [DR-41] */
@@ -1301,6 +1348,104 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return { windows, stitched: stitched - 1, stitchedBench: stitchedBench - 1, distinctParams: sets.size, nWin, start, segLen, oosFrac: (n - start) / n };
   };
 
+  /* ---------- PBO via CSCV [DR-76] (Bailey, Borwein, López de Prado, Zhu 2014) ---------- */
+  // Per-block return moments [n, Σr, Σr²] for one equity curve — cheap to combine later.
+  BT.blockMoments = function (equity, warm, S) {
+    const rets = [];
+    for (let i = warm + 1; i < equity.length; i++) rets.push(equity[i] / equity[i - 1] - 1);
+    const per = Math.floor(rets.length / S);
+    if (per < 2) return null;
+    const mom = [];
+    for (let b = 0; b < S; b++) {
+      const s = b * per, e = (b === S - 1) ? rets.length : s + per;   // last block absorbs remainder
+      let n = 0, su = 0, s2 = 0;
+      for (let i = s; i < e; i++) { n++; su += rets[i]; s2 += rets[i] * rets[i]; }
+      mom.push([n, su, s2]);
+    }
+    return mom;
+  };
+  // CSCV: all C(S, S/2) train/test splits; PBO = fraction of splits where the in-sample
+  // winner ranks below median out-of-sample. The canonical overfitting probability.
+  BT.pboCSCV = function (blockList, S) {
+    const cfgs = blockList.filter(Boolean);
+    if (cfgs.length < 4 || S % 2 !== 0) return null;
+    const half = S / 2, splits = [];
+    (function rec(start, acc) {
+      if (acc.length === half) { splits.push(acc.slice()); return; }
+      for (let i = start; i < S; i++) { acc.push(i); rec(i + 1, acc); acc.pop(); }
+    })(0, []);
+    const sharpeOf = (idxs, mom) => {
+      let n = 0, su = 0, s2 = 0;
+      for (const b of idxs) { n += mom[b][0]; su += mom[b][1]; s2 += mom[b][2]; }
+      if (n < 2) return 0;
+      const mean = su / n, v = Math.max(0, (s2 - n * mean * mean) / (n - 1)), sd = Math.sqrt(v);
+      return sd > 1e-12 ? mean / sd : 0;
+    };
+    const allIdx = Array.from({ length: S }, (_, i) => i);
+    let below = 0;
+    const lambdas = [];
+    for (const isIdx of splits) {
+      const inSet = new Set(isIdx);
+      const oosIdx = allIdx.filter(b => !inSet.has(b));
+      let bestC = 0, bestV = -Infinity;
+      const oosVals = new Float64Array(cfgs.length);
+      for (let c = 0; c < cfgs.length; c++) {
+        const v = sharpeOf(isIdx, cfgs[c]);
+        oosVals[c] = sharpeOf(oosIdx, cfgs[c]);
+        if (v > bestV) { bestV = v; bestC = c; }
+      }
+      let rank = 0;
+      for (let c = 0; c < cfgs.length; c++) if (oosVals[c] < oosVals[bestC]) rank++;
+      const w = (rank + 0.5) / cfgs.length;
+      lambdas.push(Math.log(w / (1 - w)));
+      if (w < 0.5) below++;
+    }
+    lambdas.sort((a, b) => a - b);
+    return { pbo: below / splits.length, nComb: splits.length, nCfg: cfgs.length,
+             medLambda: lambdas[Math.floor(lambdas.length / 2)] };
+  };
+
+  /* ---------- Monte Carlo trade-order bootstrap [DR-76] ---------- */
+  BT.monteCarlo = function (trades, nSim, seed) {
+    const closed = (trades || []).filter(t => !t.open).map(t => t.ret);
+    if (closed.length < 10) return null;
+    nSim = nSim || 2000;
+    const rnd = mulberry32(seed || 42);
+    const T = closed.length;
+    const finals = new Float64Array(nSim), dds = new Float64Array(nSim);
+    for (let s = 0; s < nSim; s++) {
+      let eq = 1, peak = 1, dd = 0;
+      for (let t = 0; t < T; t++) {
+        eq *= 1 + closed[(rnd() * T) | 0];
+        if (eq > peak) peak = eq;
+        const d = eq / peak - 1;
+        if (d < dd) dd = d;
+      }
+      finals[s] = eq - 1; dds[s] = dd;
+    }
+    finals.sort(); dds.sort();
+    const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
+    let losses = 0;
+    for (const x of finals) if (x < 0) losses++;
+    return { n: T, nSim,
+      ret: { p5: q(finals, 0.05), p25: q(finals, 0.25), p50: q(finals, 0.5), p75: q(finals, 0.75), p95: q(finals, 0.95) },
+      dd: { p50: q(dds, 0.5), worst5: q(dds, 0.05) },
+      probLoss: losses / nSim };
+  };
+
+  /* ---------- per-bar regime classes for chart shading [DR-62, DR-76] ---------- */
+  BT.regimeClasses = function (C) {                       // 0 none · 1 bull · 2 chop · 3 bear
+    const n = C.n, out = new Int8Array(n);
+    if (n < 260) return out;
+    const s200 = sma(C.c, 200);
+    for (let i = 220; i < n; i++) {
+      if (!isFinite(s200[i]) || !isFinite(s200[i - 20])) continue;
+      const rising = s200[i] > s200[i - 20], above = C.c[i] > s200[i];
+      out[i] = (above && rising) ? 1 : (!above && !rising) ? 3 : 2;
+    }
+    return out;
+  };
+
   /* ---------- signal state + forward tracking [DR-75] ---------- */
   // What is this config saying RIGHT NOW on this data? (position, freshness, gate, regime)
   BT.signalState = function (bars, stratId, params, filters) {
@@ -1449,17 +1594,20 @@ self.onmessage = function (e) {
       const monthly = BT.monthlyReturns(r.equity, C.ts, warm);
       const tear = BT.tearsheet(r.equity, C, m.opts.barsPerYear || 365, warm, r.trades, monthly);  /* [DR-50] */
       const regime = BT.regimeBreakdown(r.equity, C, warm);                      /* [DR-62] */
+      const mc = BT.monteCarlo(r.trades, 2000, 42);                              /* [DR-76] deterministic seed */
+      const regimeCls = Array.from(BT.regimeClasses(C));                         /* [DR-76] chart shading */
       self.postMessage({ id: m.id, ok: true, kind: 'run',
         equity: Array.from(r.equity), bench: Array.from(bench), trades: r.trades,
-        metrics: r.metrics, monthly, tear, regime, warm,
+        metrics: r.metrics, monthly, tear, regime, mc, regimeCls, warm,
         benchTotal: bench[C.n - 1] / bench[warm] - 1,                             /* [DR-57] same window */
         benchFull: C.c[C.n - 1] / C.c[0] - 1 });                                  /* [DR-58] incl. warm-up, for context */
     } else if (m.cmd === 'sweep') {
       const t0 = performance.now();
       const split = m.splitPct ? Math.floor(m.bars.length * m.splitPct) : m.bars.length;   /* [DR-42] */
       const isBars = split < m.bars.length ? m.bars.slice(0, split) : m.bars;
-      const sw = BT.sweep(isBars, m.stratId, m.grids, Object.assign({}, m.opts, { rank: 'plateau' }),   /* [DR-72] robust ranking */
+      const sw = BT.sweep(isBars, m.stratId, m.grids, Object.assign({}, m.opts, { rank: 'plateau', pboBlocks: 12 }),   /* [DR-72, DR-76] */
         (done, total) => self.postMessage({ id: m.id, kind: 'progress', done, total }));
+      const pbo = sw.results.length >= 10 ? BT.pboCSCV(sw.results.map(r => r.blocks), 12) : null;   /* [DR-76] */
       let results = sw.results.slice(0, 100).map(r => ({ params: r.params, m: r.m, plateau: r.plateau, plateauN: r.plateauN, dom: r.dom }));
       if (split < m.bars.length) {                       // OOS pass with pre-window warm-up lead [DR-42, DR-47]
         results = results.map(r => {
@@ -1491,7 +1639,7 @@ self.onmessage = function (e) {
       const famStats = BT.familyStats(sw.results, skey).map(f => ({                /* [DR-72] fair per-class stats */
         type: f.type, n: f.n, median: f.median, bestRaw: f.bestRaw, eMax: f.eMax, deflated: f.deflated,
         maxDom: f.maxDom, bestParams: f.best.params, bestPlateau: f.best.plateau, bestDom: f.best.dom }));
-      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, famStats, benchM: sw.benchM, ms: performance.now() - t0 });
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, famStats, benchM: sw.benchM, pbo, ms: performance.now() - t0 });
     } else if (m.cmd === 'tour') {                        /* [DR-72] per-family WFA, common windows */
       const t0 = performance.now();
       const nW = m.nWin || 5;
@@ -2005,6 +2153,14 @@ function drawEquityChartL(el, R) {
   const pack = (arr) => { const d = []; for (let i = warm; i < arr.length; i++) d.push({ time: Math.floor(t[i] / 1000), value: arr[i] }); return d; };
   lwcLine(chart, css('--s2'), pack(R.res.bench));
   lwcLine(chart, css('--s1'), pack(R.res.equity));
+  if (S.pinned && S.pinned.equity) {                                             /* [DR-76] pinned comparison, rebased to same start capital */
+    const P = S.pinned;
+    const scale = (R.opts.capital || 10000) / P.equity[P.warm];
+    const d = [];
+    for (let i = P.warm; i < P.equity.length; i++) d.push({ time: Math.floor(P.ts[i] / 1000), value: P.equity[i] * scale });
+    const line = chart.addSeries(LightweightCharts.LineSeries, { color: css('--muted'), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+    line.setData(d);
+  }
   chart.timeScale().fitContent();
 }
 const OV_COLORS = () => [css('--s1'), css('--s2'), css('--muted')];               /* [DR-54] roles 0/1/2 */
@@ -2013,10 +2169,16 @@ function ovLegend(el, series) {
 }
 function drawPriceChartL(el, R, ov) {
   const chart = lwcMake(el);
+  const t = R.ts;
+  if (R.res.regimeCls && R.res.regimeCls.some(c => c > 0)) {                     /* [DR-76] regime background shading */
+    const REG_COL = { 1: 'rgba(12,163,12,0.10)', 2: 'rgba(250,178,25,0.07)', 3: 'rgba(208,59,59,0.10)' };
+    const hist = chart.addSeries(LightweightCharts.HistogramSeries, { priceScaleId: 'regime', priceLineVisible: false, lastValueVisible: false });
+    hist.setData(t.map((ms, i) => ({ time: Math.floor(ms / 1000), value: 1, color: REG_COL[R.res.regimeCls[i]] || 'rgba(0,0,0,0)' })));
+    chart.priceScale('regime').applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
+  }
   const cs = chart.addSeries(LightweightCharts.CandlestickSeries, {
     upColor: css('--up'), downColor: css('--down'), wickUpColor: css('--up'), wickDownColor: css('--down'), borderVisible: false,
   });
-  const t = R.ts;
   cs.setData(t.map((ms, i) => ({ time: Math.floor(ms / 1000), open: R.opens[i], high: R.highs[i], low: R.lows[i], close: R.closes[i] })));
   for (const s of (ov && ov.price) || []) {                                      /* [DR-54] indicator overlays */
     const line = chart.addSeries(LightweightCharts.LineSeries, {
@@ -2172,9 +2334,32 @@ function renderResults() {
                tile('Avg bars/trade', avgBars.toFixed(0)); })()}
     </div>
     <h2>Equity vs Buy &amp; Hold</h2>
-    <div class="legend"><span><span class="sw" style="background:var(--s1)"></span>Strategy</span><span><span class="sw" style="background:var(--s2)"></span>Buy &amp; Hold</span></div>
+    <div class="legend"><span><span class="sw" style="background:var(--s1)"></span>Strategy</span><span><span class="sw" style="background:var(--s2)"></span>Buy &amp; Hold</span>${S.pinned ? `<span><span class="sw" style="background:var(--muted)"></span>Pinned: ${S.pinned.label} (${fmtPct(S.pinned.total)})</span>` : ''}</div>
     <div class="lwc" id="chEq"></div>
-    <h2>Price, indicators &amp; trades <span style="text-transform:none;letter-spacing:0">(▲ buy · ▼ sell — SL/TS/TP/CB mark protective exits)</span></h2>
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="pinBtn">${S.pinned ? 'Unpin comparison' : 'Pin this result for compare'}</button>
+    </div>
+    ${S.pinned && S.pinned.m ? (() => {                                          /* [DR-77] side-by-side vs pinned */
+      const P = S.pinned.m;
+      const row = (label, cur, pin, fmt, higherBetter) => {
+        const cb = higherBetter ? cur > pin : cur < pin;
+        return `<tr><td>${label}</td><td class="${cb ? 'pos' : ''}">${cb ? '<b>' + fmt(cur) + '</b>' : fmt(cur)}</td><td class="${!cb ? 'pos' : ''}">${!cb ? '<b>' + fmt(pin) + '</b>' : fmt(pin)}</td></tr>`;
+      };
+      return `<div class="card scrollx" style="padding:6px 10px;margin-top:8px">
+      <table><thead><tr><th>vs pinned</th><th>Current</th><th>${S.pinned.label}</th></tr></thead><tbody>
+        ${row('Total return', m.totalReturn, P.totalReturn, fmtPct, true)}
+        ${row('CAGR', m.cagr, P.cagr, fmtPct, true)}
+        ${row('Sharpe', m.sharpe, P.sharpe, fmtNum, true)}
+        ${row('Sortino', m.sortino, P.sortino, fmtNum, true)}
+        ${row('IR vs B&H', m.ir, P.ir, fmtNum, true)}
+        ${row('Max drawdown', m.maxDrawdown, P.maxDrawdown, fmtPctU, false)}
+        ${row('Exposure', m.exposure, P.exposure, (x) => fmtPctU(x, 0), false)}
+        ${row('Trades', m.trades, P.trades, (x) => String(x), false)}
+      </tbody></table>
+      <p class="hint">Bold = better side per metric (fewer trades / lower exposure / shallower DD count as better). Curves are only directly comparable when run on the same symbol and window. [DR-77]</p>
+      </div>`;
+    })() : ''}
+    <h2>Price, indicators &amp; trades <span style="text-transform:none;letter-spacing:0">(▲ buy · ▼ sell · SL/TS/TP/CB protective exits · shading = 200-bar regime: green bull / amber chop / red bear)</span></h2>
     <div class="legend" id="pxLegend"></div>
     <div class="lwc" id="chPx"></div>
     <div id="subWrap" style="display:none"><div class="legend" id="subLegend"></div><div class="lwc short" id="chSub"></div></div>
@@ -2187,12 +2372,29 @@ function renderResults() {
       ${tile('VaR 95% / bar', fmtPct(ts.var95, 2), 'neg', 'a typical bad bar')}
       ${tile('CVaR 95%', fmtPct(ts.cvar95, 2), 'neg', 'average of the worst 5%')}
       ${tile('Kelly', ts.kelly == null ? '—' : fmtPctU(ts.kelly, 0), '', 'suggested max risk fraction')}
+      ${tile('Ulcer index', fmtPctU(ts.ulcer, 2), 'neg', 'RMS drawdown — the pain index [DR-76]')}
+      ${tile('UPI', fmtNum(ts.upi), '', 'CAGR ÷ Ulcer (Martin ratio)')}
+      ${tile('Omega', fmtNum(ts.omega), '', 'sum of gains ÷ sum of losses, all bars')}
+      ${tile('Tail ratio', fmtNum(ts.tailRatio), '', 'p95 gain vs p5 loss magnitude')}
       ${tile('Expectancy', fmtPct(ts.expectancy, 2), ts.expectancy >= 0 ? 'pos' : 'neg', 'avg return per closed trade')}
       ${tile('Win streak', ts.maxWinStreak, 'pos')}
       ${tile('Loss streak', ts.maxLossStreak, 'neg')}
       ${tile('Best month', ts.bestMonth ? fmtPct(ts.bestMonth.ret) : '—', 'pos', ts.bestMonth ? ts.bestMonth.key : '')}
       ${tile('Worst month', ts.worstMonth ? fmtPct(ts.worstMonth.ret) : '—', 'neg', ts.worstMonth ? ts.worstMonth.key : '')}
     </div>
+    ${R.res.mc ? `
+    <h2>Monte Carlo <span style="text-transform:none;letter-spacing:0">(${R.res.mc.nSim.toLocaleString()} reshuffles of your ${R.res.mc.n} closed trades)</span></h2>
+    <div class="card">
+      <div class="mgrid" style="margin-top:0">
+        ${tile('5th pct return', fmtPct(R.res.mc.ret.p5), R.res.mc.ret.p5 >= 0 ? 'pos' : 'neg', 'plausible bad luck')}
+        ${tile('Median return', fmtPct(R.res.mc.ret.p50), R.res.mc.ret.p50 >= 0 ? 'pos' : 'neg', 'the honest central estimate')}
+        ${tile('95th pct return', fmtPct(R.res.mc.ret.p95), 'pos', 'plausible good luck')}
+        ${tile('Median max DD', fmtPctU(R.res.mc.dd.p50), 'neg', '')}
+        ${tile('Worst-5% max DD', fmtPctU(R.res.mc.dd.worst5), 'neg', 'size positions for THIS, not the backtest DD')}
+        ${tile('P(loss)', fmtPctU(R.res.mc.probLoss, 1), R.res.mc.probLoss > 0.2 ? 'neg' : '', 'chance the same trades, reshuffled, lose money')}
+      </div>
+      <p class="hint">Your backtest is ONE ordering of these trades — resampling them with replacement asks how much of the headline number is sequencing luck. Trade-level resolution slightly understates intrabar drawdowns. [DR-76]</p>
+    </div>` : ''}
     <h2>Top drawdowns</h2>
     <div class="card scrollx" style="padding:6px 10px">
       <table><thead><tr><th>Depth</th><th>Peak</th><th>Trough</th><th>Recovered</th><th>Bars</th></tr></thead>
@@ -2222,6 +2424,11 @@ function renderResults() {
         <td>${t.exitIdx - t.entryIdx}</td><td>${t.entryPx.toFixed(2)}</td><td>${t.exitPx.toFixed(2)}</td>
         <td class="${t.ret >= 0 ? 'pos' : 'neg'}">${fmtPct(t.ret, 2)}</td></tr>`).join('')}</tbody></table>
     </div>`;
+  $('#pinBtn').onclick = () => {                                                 /* [DR-76] */
+    S.pinned = S.pinned ? null : { label: `${stratName} ${Object.values(R.params).join('/')} @ ${R.meta.symbol}`,
+                                   equity: R.res.equity, warm: R.res.warm, ts: R.ts, total: m.totalReturn, m };
+    renderResults();
+  };
   const strat = BT.strategy(R.stratId);                                          /* [DR-54] */
   const ov = strat.overlays ? strat.overlays(BT.colsFromBars(R.barsRef), R.params) : null;
   drawEquityChartL($('#chEq'), R);
@@ -2448,6 +2655,12 @@ async function runSweep() {
           ${consensus ? `<button class="btn ghost" id="swCons" data-p='${JSON.stringify(consensus)}' style="margin-top:10px">Load consensus pick: ${Object.entries(consensus).map(([k, v]) => k === 'type' ? v : v).join(' / ')} (plateau center)</button>
           <div class="hint">The consensus pick is the modal MA type + median periods across window winners — the center of the plateau, which generalizes better than any single window’s exact cell. [DR-48]</div>` : ''}
         </div>
+        <div class="card" style="padding:10px 14px">
+          <div class="row" id="wfaStrip" style="gap:2px;flex-wrap:nowrap">${wf.windows.map(w => w
+            ? `<div title="${fmtDate(w.from)} → ${fmtDate(w.to)}: ${fmtPct(w.oos.totalReturn)} vs B&amp;H ${fmtPct(w.bench)}" style="flex:1;height:12px;border-radius:3px;background:${w.oos.totalReturn > w.bench ? 'var(--good)' : 'var(--crit)'};opacity:.8"></div>`
+            : '<div style="flex:1;height:12px;border-radius:3px;background:var(--axis)"></div>').join('')}</div>
+          <div class="hint">OOS window timeline, oldest → newest — green beat B&amp;H, red didn't. Consistency along the strip matters more than the stitched total; a strip that's only green at one end is an era tell. [DR-77]</div>
+        </div>
         <div class="card scrollx" style="padding:6px 10px">
         <table><thead><tr><th>Window</th><th>Winner (re-fit)</th><th>OOS Ret</th><th>B&amp;H</th></tr></thead>
         <tbody>${wf.windows.map((w, i) => w ? `
@@ -2496,6 +2709,7 @@ async function runSweep() {
                   : '<b class="neg">below what luck alone would produce</b>';
           return `<div class="hint" style="margin-top:6px">Selection-bias check: testing ${ts.n.toLocaleString()} combos, pure luck would be expected to yield a best in-sample ${lbl} of ~${expMax.toFixed(2)}. Your best is ${top.toFixed(2)} — ${v}. [DR-46, DR-62]</div>`;
         })()}
+        ${res.pbo ? `<div class="hint" style="margin-top:6px">Overfitting probability (CSCV, ${res.pbo.nComb.toLocaleString()} train/test recombinations of ${res.pbo.nCfg} combos): <b>PBO ${(res.pbo.pbo * 100).toFixed(0)}%</b> — the chance this grid's in-sample winner lands below median out-of-sample. Guide: &lt;10% strong · 10–40% caution · &gt;40% mostly noise. [DR-76]</div>` : ''}
         <div class="row" style="margin-top:8px;flex-wrap:wrap">
           <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button">${filterOn ? `Showing only B&amp;H beaters` : 'Only B&H beaters'}</button>
           <button class="mini toggle${domOn ? ' on' : ''}" id="swDomF" type="button">${domOn ? `Showing only 5/5 dominant (${nDom})` : 'Only 5/5 dominant'}</button>
@@ -2551,6 +2765,150 @@ async function runSweep() {
   } catch (e) {
     if (!cancelled) { endSweep(); warn.innerHTML = `<div class="errline">✕ &nbsp;Sweep failed: ${e.message}</div>`; }
   }
+}
+
+/* ---------------- robustness panel + config library [DR-77] ---------------- */
+async function robustnessCheck() {
+  const out = $('#robustOut');
+  if (!validateParams()) { out.innerHTML = '<div class="errline">✕ &nbsp;Fix the strategy parameters first.</div>'; return; }
+  const keys = await DB.keys('datasets');
+  if (keys.length < 2) { out.innerHTML = '<div class="errline">✕ &nbsp;Need at least two stored datasets — fetch more on the Data tab.</div>'; return; }
+  const stratId = $('#stratSel').value, params = readParams($('#paramBox'));
+  const baseOpts = currentOpts();
+  const cut = fitFromMs();
+  $('#robustBtn').disabled = true;
+  const rows = [];
+  if (!S.worker) S.worker = makeWorker();
+  for (let i = 0; i < keys.length; i++) {
+    const rec = await DB.get('datasets', keys[i]);
+    out.innerHTML = `<div class="hint" style="margin-top:8px"><span class="spin"></span>&nbsp; ${rec.meta.symbol} · ${EXCHANGES[rec.meta.exchange] ? EXCHANGES[rec.meta.exchange].name : rec.meta.exchange} (${i + 1}/${keys.length})…</div>`;
+    let i0 = 0;
+    while (i0 < rec.bars.length && rec.bars[i0][0] < cut) i0++;
+    const bars = i0 > 0 ? rec.bars.slice(i0) : rec.bars;
+    if (bars.length < 300) { rows.push({ meta: rec.meta, skip: bars.length + ' bars after fit-from — too few' }); continue; }
+    try {
+      const o = { ...baseOpts, barsPerYear: BT.barsPerYear(BT.TF_SECONDS[rec.meta.tf]) };
+      const res = await workerCall(S.worker, { cmd: 'run', bars, stratId, params, opts: o });
+      rows.push({ meta: rec.meta, n: bars.length, from: bars[0][0], m: res.metrics, bench: res.benchTotal });
+    } catch (e) { rows.push({ meta: rec.meta, skip: 'failed: ' + e.message }); }
+  }
+  $('#robustBtn').disabled = false;
+  const ok = rows.filter(r => !r.skip);
+  const wins = ok.filter(r => r.m.totalReturn > r.bench);
+  const sig = ok.filter(r => r.m.tExcess >= 1.65);
+  const allAgree = ok.length >= 2 && (wins.length === ok.length || wins.length === 0);
+  out.innerHTML = `
+    <div class="card scrollx" style="background:var(--surface2);padding:6px 10px;margin-top:10px">
+    <table><thead><tr><th>Dataset</th><th>Bars</th><th>Strategy</th><th>B&amp;H</th><th>Edge</th><th>t</th><th>Max DD</th></tr></thead>
+    <tbody>${rows.map(r => r.skip ? `
+      <tr><td>${r.meta.demo ? 'DEMO ' : ''}${r.meta.symbol} <span class="note">${EXCHANGES[r.meta.exchange] ? EXCHANGES[r.meta.exchange].name : r.meta.exchange}</span></td><td colspan="6" class="note">${r.skip}</td></tr>` : `
+      <tr>
+        <td>${r.meta.demo ? 'DEMO ' : ''}${r.meta.symbol} <span class="note">${EXCHANGES[r.meta.exchange] ? EXCHANGES[r.meta.exchange].name : r.meta.exchange} · ${fmtDate(r.from).slice(0, 4)}+</span></td>
+        <td>${r.n.toLocaleString()}</td>
+        <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}</td>
+        <td class="${r.bench >= 0 ? 'pos' : 'neg'}">${fmtPct(r.bench)}</td>
+        <td class="${r.m.totalReturn > r.bench ? 'pos' : 'neg'}"><b>${fmtPct(r.m.totalReturn - r.bench)}${r.m.totalReturn > r.bench ? ' ✓' : ''}</b></td>
+        <td>${fmtNum(r.m.tExcess)}${r.m.tExcess >= 1.65 ? '<b class="pos">*</b>' : ''}</td>
+        <td class="neg">${fmtPctU(r.m.maxDrawdown)}</td></tr>`).join('')}</tbody></table>
+    </div>
+    <div class="${allAgree && wins.length ? 'okline' : (wins.length ? 'warnline' : 'errline')}">
+      ${wins.length === ok.length && ok.length >= 2 ? '✓ &nbsp;Edge positive on ALL ' + ok.length + ' datasets' + (sig.length ? ' (' + sig.length + ' with t ≥ 1.65*)' : '') + ' — exchange- and era-robust, the strongest in-sample agreement this check can show.'
+      : wins.length === 0 ? '✕ &nbsp;Beat Buy &amp; Hold on none of ' + ok.length + ' datasets — on this config, holding wins everywhere.'
+      : '⚠ &nbsp;Edge on ' + wins.length + ' of ' + ok.length + ' datasets — check WHERE it fails: same asset on another exchange failing = venue/data tell; deep-history dataset failing = era tell (compare fit-from dates).'}
+    </div>
+    <p class="hint">Same-window B&amp;H per dataset, fit-from ${cut ? fmtDate(cut) : 'off (all history)'} applied to each. In-sample agreement, not validation — the walk-forward and forward record remain the judges. [DR-77]</p>`;
+}
+async function getLibrary() { return (await DB.get('settings', 'library')) || []; }
+function libSummary(e) {
+  const f = e.opts && e.opts.filters;
+  const bits = [BT.strategy(e.stratId).name + ' ' + Object.values(e.params).join('/')];
+  if (f && f.level) bits.push('Faber ' + (f.level.type || 'SMA') + f.level.len);
+  if (f && f.slope) bits.push('slope');
+  if (f && f.adx) bits.push('ADX');
+  if (f && f.vwap) bits.push('VWAP');
+  if (e.opts && e.opts.sizing && e.opts.sizing.mode === 'atr') bits.push('ATR sizing');
+  return bits.join(' · ');
+}
+async function renderLibrary() {
+  const list = await getLibrary();
+  const box = $('#libList');
+  if (!list.length) { box.innerHTML = '<div class="hint">Nothing saved yet.</div>'; return; }
+  box.innerHTML = list.map(e => `
+    <div class="ds" data-lib="${e.id}">
+      <div class="t"><b>${e.name}</b><div class="sub">${libSummary(e)} · saved ${fmtDate(e.createdAt)}</div></div>
+      <button class="mini" data-lact="load">Load</button>
+      <button class="mini" data-lact="del">✕</button>
+    </div>`).join('');
+  $$('#libList [data-lact]').forEach(b => b.onclick = () => libAction(b.closest('[data-lib]').dataset.lib, b.dataset.lact));
+}
+function applyOptsToUI(opts) {                                                   /* [DR-77] full round-trip: opts → inputs */
+  if (!opts) return;
+  if (opts.feePct !== undefined) $('#feeIn').value = opts.feePct;
+  if (opts.slipPct !== undefined) $('#slipIn').value = opts.slipPct;
+  if (opts.capital !== undefined) $('#capIn').value = opts.capital;
+  $('#slIn').value = opts.stopLossPct || 0; $('#tpIn').value = opts.takeProfitPct || 0;
+  $('#trailIn').value = opts.trailStopPct || 0; $('#cbIn').value = opts.maxDDStopPct || 0;
+  const atr = opts.sizing && opts.sizing.mode === 'atr';
+  $('#sizeMode').value = atr ? 'atr' : 'full';
+  $('#atrBox').style.display = atr ? '' : 'none';
+  if (atr) { $('#riskIn').value = opts.sizing.riskPct; $('#atrPIn').value = opts.sizing.atrPeriod; $('#atrMIn').value = opts.sizing.atrMult; }
+  applyFiltersToUI(opts.filters);
+}
+async function libAction(id, act) {
+  const list = await getLibrary();
+  const e = list.find(x => x.id === id);
+  if (!e) return;
+  if (act === 'del') {
+    await DB.put('settings', 'library', list.filter(x => x.id !== id));
+    renderLibrary(); return;
+  }
+  if (act === 'load') {
+    applyOptsToUI(e.opts);
+    loadParamsIntoStrategy(e.stratId, e.params, `“${e.name}”`);
+  }
+}
+async function libSave() {
+  if (!validateParams()) { $('#libHint').innerHTML = '<div class="errline">✕ &nbsp;Fix the strategy parameters first.</div>'; return; }
+  const cs = currentSetup();
+  const def = BT.strategy(cs.stratId).name + ' ' + Object.values(cs.params).join('/');
+  const name = prompt('Name this config', def);
+  if (!name) return;
+  const list = await getLibrary();
+  const o = cs.opts;
+  list.push({ id: 'lib' + Date.now(), name: name.slice(0, 60), createdAt: Date.now(), stratId: cs.stratId, params: cs.params,
+              opts: { feePct: o.feePct, slipPct: o.slipPct, capital: o.capital, stopLossPct: o.stopLossPct, takeProfitPct: o.takeProfitPct,
+                      trailStopPct: o.trailStopPct, maxDDStopPct: o.maxDDStopPct, sizing: o.sizing, filters: o.filters } });
+  await DB.put('settings', 'library', list);
+  $('#libHint').innerHTML = '<div class="okline">✓ &nbsp;Saved.</div>';
+  renderLibrary();
+}
+async function libExport() {
+  const list = await getLibrary();
+  const payload = { app: 'backtest-forge', kind: 'config-library', version: 1, exportedAt: Date.now(), configs: list };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const fname = 'btforge_configs.json';
+  const file = new File([blob], fname, { type: 'application/json' });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: fname }); return; } } catch (e) { /* fall through */ }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+async function libImport(file) {
+  const hint = $('#libHint');
+  try {
+    const j = JSON.parse(await file.text());
+    const incoming = Array.isArray(j) ? j : (j.configs || []);
+    const valid = incoming.filter(e => e && e.stratId && BT.strategy(e.stratId) && e.params && typeof e.params === 'object');
+    if (!valid.length) throw new Error('no valid configs found');
+    const list = await getLibrary();
+    for (const e of valid) list.push({ ...e, id: 'lib' + Date.now() + Math.floor(Math.random() * 1e4),
+                                       name: String(e.name || 'Imported').slice(0, 60),
+                                       createdAt: Number.isFinite(e.createdAt) ? e.createdAt : Date.now(),
+                                       opts: e.opts || {} });
+    await DB.put('settings', 'library', list);
+    hint.innerHTML = `<div class="okline">✓ &nbsp;Imported ${valid.length} config${valid.length === 1 ? '' : 's'}${valid.length < incoming.length ? ' (' + (incoming.length - valid.length) + ' skipped — unknown strategy or malformed)' : ''}.</div>`;
+    renderLibrary();
+  } catch (e) { hint.innerHTML = `<div class="errline">✕ &nbsp;Import failed: ${e.message}. Expected a JSON export from this app.</div>`; }
 }
 
 /* ---------------- Radar: today panel + screener + forward tracker [DR-75] ---------------- */
@@ -2665,7 +3023,7 @@ async function trackAction(id, act, btn) {
   }
   if (act === 'load') {
     await selectDataset(e.dsKey).catch(() => {});
-    applyFiltersToUI(e.opts.filters);
+    applyOptsToUI(e.opts);                                                       /* [DR-77] full opts round-trip */
     loadParamsIntoStrategy(e.stratId, e.params, 'Tracked config');
     return;
   }
@@ -2695,6 +3053,34 @@ function applyFiltersToUI(filters) {                                            
   if (filters && filters.vwap) { $('#fVwapLen').value = filters.vwap.len; }
   if (filters && filters.level) { $('#fLevelType').value = filters.level.type || 'SMA'; $('#fLevelLen').value = filters.level.len; }
 }
+/* volume-ranked universe discovery [DR-78]: one bulk ticker call per exchange */
+async function discoverUniverse(exId, minVolUSD, maxN) {
+  const proxy = await getProxy();
+  const get = async (url) => {
+    let r;
+    try { r = await fetch(proxy + url); } catch (e) { throw { cause: classifyFetchError(e, null) }; }
+    if (!r.ok) throw { cause: classifyFetchError(null, r) };
+    return r.json();
+  };
+  if (exId === 'binance') {
+    const all = await get('https://api.binance.com/api/v3/ticker/24hr');
+    const lev = /(UP|DOWN|BULL|BEAR)USDT$/;                                      // leveraged tokens out
+    const stable = /^(USDC|FDUSD|TUSD|BUSD|DAI|USDP|EUR|AEUR|EURI|XUSD|USD1)USDT$/;   // stables/fiat out
+    return all.filter(t => t.symbol && t.symbol.endsWith('USDT') && !lev.test(t.symbol) && !stable.test(t.symbol) && +t.quoteVolume >= minVolUSD)
+      .sort((a, b) => +b.quoteVolume - +a.quoteVolume)
+      .slice(0, maxN)
+      .map(t => ({ sym: t.symbol.slice(0, -4) + '/USDT', vol: +t.quoteVolume }));
+  }
+  if (exId === 'bitstamp') {
+    const all = await get('https://www.bitstamp.net/api/v2/ticker/');
+    return all.filter(t => t.pair && t.pair.endsWith('/USD'))
+      .map(t => ({ sym: t.pair, vol: (+t.volume || 0) * (+t.last || 0) }))
+      .filter(t => Number.isFinite(t.vol) && t.vol >= minVolUSD)
+      .sort((a, b) => b.vol - a.vol)
+      .slice(0, maxN);
+  }
+  return null;                                                                   // coinbase: no bulk stats endpoint
+}
 let scCancelled = false;
 async function runScan() {
   const status = $('#scStatus');
@@ -2703,7 +3089,21 @@ async function runScan() {
   const profs = SCAN_PROFILES.filter(p => profIds.includes(p.id));
   if (!profs.length) { status.innerHTML = '<div class="errline">✕ &nbsp;Pick at least one profile.</div>'; return; }
   const extra = $('#scExtra').value.split(',').map(s => normalizeSymbol(s)).filter(Boolean);
-  const syms = [...new Set([...SC_UNIVERSE[exId], ...extra])];
+  let base = SC_UNIVERSE[exId], uniNote = 'curated majors';
+  if ($('#scUni').value === 'volume') {                                          /* [DR-78] */
+    const minVol = (+$('#scMinVol').value || 25) * 1e6, maxN = Math.min(60, +$('#scMaxN').value || 30);
+    status.innerHTML = '<span class="spin"></span>&nbsp; Discovering pairs above $' + (minVol / 1e6) + 'M 24h volume…';
+    try {
+      const disc = await discoverUniverse(exId, minVol, maxN);
+      if (disc === null) { uniNote = 'curated majors (Coinbase has no bulk-volume endpoint)'; }
+      else if (!disc.length) { status.innerHTML = '<div class="errline">✕ &nbsp;No pairs above the floor — lower the volume threshold.</div>'; return; }
+      else { base = disc.map(d => d.sym); uniNote = disc.length + ' pairs ≥ $' + (minVol / 1e6) + 'M 24h volume (by rank)'; }
+    } catch (e) {
+      status.innerHTML = `<div class="warnline">⚠ &nbsp;Volume discovery failed (${(e && e.cause) || 'ERROR'}) — falling back to curated majors.</div>`;
+      await sleep(900);
+    }
+  }
+  const syms = [...new Set([...base, ...extra])];
   scCancelled = false;
   $('#scRunBtn').style.display = 'none'; $('#scCancelBtn').style.display = '';
   $('#scCancelBtn').onclick = () => { scCancelled = true; };
@@ -2714,7 +3114,7 @@ async function runScan() {
     try {
       const res = await fetchREST(exId, syms[i], '1d', 500, null);
       const cleaned = BT.cleanBars(res.bars);
-      if (cleaned.bars.length < 260) throw { cause: 'EMPTY' };
+      if (cleaned.bars.length < 260) { errs.push(syms[i] + ' (young listing: ' + cleaned.bars.length + ' bars — needs 260+ for the gate)'); continue; }   /* [DR-78] */
       for (const p of profs) {
         const cfg = p.current ? currentSetup() : p;
         const filters = p.current ? cfg.opts.filters : p.filters;
@@ -2733,7 +3133,7 @@ async function runScan() {
   const score = (r) => r.st.action ? 0 : (r.st.gate && !r.st.gate.above && Math.abs(r.st.gate.dist) < 0.03 ? 1 : (r.st.pos ? 2 : 3));
   rows.sort((a, b) => (score(a) - score(b)) || (a.st.barsSince - b.st.barsSince));
   status.innerHTML = scCancelled ? 'Scan cancelled — partial results below.' :
-    `${rows.length} symbol×profile states${errs.length ? ' · unreachable: ' + errs.join(', ') : ''}. Fresh signals rank first, then near-gate setups, then held positions.`;
+    `${rows.length} symbol×profile states · universe: ${uniNote}${errs.length ? ' · skipped: ' + errs.join(', ') : ''}. Fresh signals rank first, then near-gate setups, then held positions.`;
   $('#scResults').innerHTML = rows.length ? `
     <div class="card scrollx" style="padding:6px 10px">
     <table><thead><tr><th>Symbol</th><th>Profile</th><th>Signal</th><th>Gate</th><th>Regime</th><th>1y vs B&amp;H</th></tr></thead>
@@ -2746,7 +3146,7 @@ async function runScan() {
         <td>${r.st.regime ? REGIME_TAG[r.st.regime] : '—'}</td>
         <td>${r.yr ? '<span class="' + (r.yr.ret >= r.yr.bench ? 'pos' : 'neg') + '">' + fmtPct(r.yr.ret) + ' / ' + fmtPct(r.yr.bench) + '</span>' : '—'}</td></tr>`).join('')}</tbody></table>
     </div>
-    <p class="hint">Signal state is computed on ~500 fresh daily candles per symbol. “1y vs B&amp;H” is context, not validation — these profiles were validated on BTC/ETH only [DR-70, DR-72]; treat other symbols as HYPOTHESES until they build a forward record. A gate reading just below 0% is a watchlist candidate: one strong close could unblock entries. [DR-75]</p>` : '';
+    <p class="hint">Signal state is computed on ~500 fresh daily candles per symbol. “1y vs B&amp;H” is context, not validation — these profiles were validated on BTC/ETH only [DR-70, DR-72]; treat other symbols as HYPOTHESES until they build a forward record. A gate reading just below 0% is a watchlist candidate: one strong close could unblock entries. [DR-75]${syms.length > 15 ? ` <b>Multiple-comparisons caution:</b> across ${syms.length} symbols, expect ~${Math.max(1, Math.round(syms.length / 25))} fresh cross${Math.round(syms.length / 25) > 1 ? 'es' : ''} on a typical day from luck alone — a fresh signal in a wide scan is a research candidate, never a validated trade. [DR-78]` : ''}</p>` : '';
 }
 /* ---------------- settings: self-test [DR-37], proxy, data mgmt ---------------- */
 async function selfTest() {
@@ -2853,6 +3253,13 @@ async function boot() {
   $('#scProfiles').innerHTML = SCAN_PROFILES.map(p =>                            /* [DR-75] */
     `<button class="mini${p.id !== 'current' ? ' chip-on' : ''}" data-chip="${p.id}" title="${p.desc}">${p.name}</button>`).join('');
   $('#scRunBtn').onclick = runScan;
+  $('#scUni').onchange = () => { $('#scVolBox').style.display = $('#scUni').value === 'volume' ? '' : 'none'; };   /* [DR-78] */
+  $('#robustBtn').onclick = robustnessCheck;                                     /* [DR-77] */
+  $('#libSaveBtn').onclick = libSave;
+  $('#libExpBtn').onclick = libExport;
+  $('#libImpBtn').onclick = () => $('#libImpInp').click();
+  $('#libImpInp').onchange = () => { if ($('#libImpInp').files[0]) { libImport($('#libImpInp').files[0]); $('#libImpInp').value = ''; } };
+  renderLibrary();
   $('#selfTestBtn').onclick = selfTest;
   $('#proxySave').onclick = async () => {
     let v = $('#proxyIn').value.trim();
