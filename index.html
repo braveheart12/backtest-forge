@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.8</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.9</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -316,7 +316,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.8</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.9</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -1430,8 +1430,23 @@ async function renderDsList() {
       <div class="t"><b>${m.symbol}</b> <span class="sub">· ${m.tf}</span>
         <div class="sub">${rec.bars.length.toLocaleString()} bars · ${fmtDate(rec.bars[0][0])} → ${fmtDate(rec.bars[rec.bars.length - 1][0])}</div></div>
       <span class="badge ${m.demo ? 'demo' : 'live'}">${m.demo ? 'DEMO · synthetic' : ((EXCHANGES[m.exchange] ? EXCHANGES[m.exchange].name : m.exchange) + (m.source === 'ccxt' ? ' · ccxt' : ' · REST'))}</span>
+      <button class="mini" data-exp="${key}" title="Export CSV">⇪</button>
       <button class="mini" data-del="${key}">✕</button>`;
     div.addEventListener('click', async (e) => {
+      if (e.target.closest('[data-exp]')) {                                      /* [DR-61] export exact stored bars */
+        e.stopPropagation();
+        const csv = 'timestamp_ms,open,high,low,close,volume\n' + rec.bars.map(b => b.join(',')).join('\n');
+        const fname = `${m.exchange}_${m.symbol.replace('/', '')}_${m.tf}.csv`;
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const file = new File([blob], fname, { type: 'text/csv' });
+        try {
+          if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: fname }); return; }
+        } catch (err) { /* user cancelled share — fall through to download */ }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        return;
+      }
       if (e.target.closest('[data-del]')) {
         e.stopPropagation();
         if (!confirm('Delete dataset ' + m.symbol + ' ' + m.tf + '?')) return;
