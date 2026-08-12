@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.0</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.2</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -278,7 +278,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.2</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -441,9 +441,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     return { mid, up, lo };
   }
-  function supertrend(C, p, mult) {                      // ATR bands with ratchet; dir=1 bullish
+  function supertrend(C, p, mult) {                      // ATR bands with ratchet; dir=1 bullish; line = active band [DR-54]
     const n = C.n, a = atr(C, p);
-    const dir = new Int8Array(n);
+    const dir = new Int8Array(n), line = new Float64Array(n).fill(NaN);
     let ub = NaN, lb = NaN, d = -1;
     for (let i = 0; i < n; i++) {
       if (!isFinite(a[i])) { dir[i] = 0; continue; }
@@ -454,8 +454,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       if (d === -1 && C.c[i] > ub) d = 1;
       else if (d === 1 && C.c[i] < lb) d = -1;
       dir[i] = d;
+      line[i] = d === 1 ? lb : ub;
     }
-    return dir;
+    return { dir, line };
   }
   function adx(C, p) {                                   // Wilder ADX
     const n = C.n, pdm = new Float64Array(n).fill(0), ndm = new Float64Array(n).fill(0), tr = new Float64Array(n).fill(NaN);
@@ -487,6 +488,22 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   }
   BT.ind = { sma, ema, rsi, atr, bollinger, supertrend, adx, ichimoku, wma, rma };
 
+  function macdLines(C, p) {                             // shared by macd signals + overlays [DR-54]
+    const f = ema(C.c, p.fast), s = ema(C.c, p.slow), n = C.n;
+    const macd = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) if (isFinite(f[i]) && isFinite(s[i])) macd[i] = f[i] - s[i];
+    const first = macd.findIndex(isFinite);
+    const sigLine = new Float64Array(n).fill(NaN);
+    if (first >= 0) {
+      const k = 2 / (p.sig + 1); let e = 0, acc = 0, cnt = 0;
+      for (let i = first; i < n; i++) {
+        if (cnt < p.sig) { acc += macd[i]; cnt++; if (cnt === p.sig) { e = acc / p.sig; sigLine[i] = e; } }
+        else { e = macd[i] * k + e * (1 - k); sigLine[i] = e; }
+      }
+    }
+    return { macd, sigLine };
+  }
+
   /* ---------- strategies [DR-30, DR-31] ---------- */
   // signals(colsOrBars, params) -> Int8Array; signals[t] uses data <= t only (causal).
   const STRATS = [
@@ -502,7 +519,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
         const f = maOf(p.type, C, p.fast), s = maOf(p.type, C, p.slow), out = new Int8Array(C.n);
         for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
         return out;
-      } },
+      },
+      overlays: (C, p) => ({ price: [                                            /* [DR-54] */
+        { label: `${p.type} ${p.fast}`, role: 0, data: maOf(p.type, C, p.fast) },
+        { label: `${p.type} ${p.slow}`, role: 1, data: maOf(p.type, C, p.slow) },
+      ] }) },
 
     { id: 'bbmr', name: 'Bollinger Mean-Rev',            /* [DR-53] buy < lower, exit > middle */
       params: [{ key: 'period', label: 'BB period', def: 20, min: 5, max: 100, step: 1 },
@@ -515,17 +536,21 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
           out[i] = pos;
         }
         return out;
-      } },
+      },
+      overlays: (C, p) => { const bb = bollinger(C.c, p.period, p.mult); return { price: [   /* [DR-54] */
+        { label: 'BB upper', role: 2, data: bb.up }, { label: `SMA ${p.period}`, role: 1, data: bb.mid }, { label: 'BB lower', role: 0, data: bb.lo },
+      ] }; } },
 
     { id: 'supert', name: 'SuperTrend',                  /* [DR-53] in market while bullish */
       params: [{ key: 'period', label: 'ATR period', def: 10, min: 3, max: 60, step: 1 },
                { key: 'mult', label: 'ATR ×', def: 3, min: 1, max: 8, step: 0.5 }],
       warmup: (p) => p.period * 2 + 2,
       signals: (C, p) => {
-        const dir = supertrend(C, p.period, p.mult), out = new Int8Array(C.n);
-        for (let i = 0; i < C.n; i++) out[i] = dir[i] === 1 ? 1 : 0;
+        const st = supertrend(C, p.period, p.mult), out = new Int8Array(C.n);
+        for (let i = 0; i < C.n; i++) out[i] = st.dir[i] === 1 ? 1 : 0;
         return out;
-      } },
+      },
+      overlays: (C, p) => { const st = supertrend(C, p.period, p.mult); return { price: [{ label: `ST ${p.period}/${p.mult}`, role: 1, data: st.line }] }; } },
 
     { id: 'rsimr', name: 'RSI Mean-Rev',
       params: [{ key: 'period', label: 'RSI period', def: 14, min: 2, max: 100, step: 1 },
@@ -539,7 +564,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
           out[i] = pos;
         }
         return out;
-      } },
+      },
+      overlays: (C, p) => ({ sub: [{ label: `RSI ${p.period}`, role: 0, data: rsi(C.c, p.period) }], subLevels: [p.buy, p.sell] }) },  /* [DR-54] */
 
     { id: 'donch', name: 'Donchian Breakout',
       params: [{ key: 'entry', label: 'Entry high (bars)', def: 20, min: 5, max: 200, step: 1 },
@@ -556,6 +582,15 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
           out[i] = pos;
         }
         return out;
+      },
+      overlays: (C, p) => {                                                      /* [DR-54] prior-bar channels, matching signal logic */
+        const hh = new Float64Array(C.n).fill(NaN), ll = new Float64Array(C.n).fill(NaN);
+        for (let i = p.entry; i < C.n; i++) {
+          let h = -Infinity; for (let j = i - p.entry; j < i; j++) if (C.h[j] > h) h = C.h[j];
+          let l = Infinity; for (let j = Math.max(0, i - p.exit); j < i; j++) if (C.l[j] < l) l = C.l[j];
+          hh[i] = h; ll[i] = l;
+        }
+        return { price: [{ label: `High ${p.entry}`, role: 0, data: hh }, { label: `Low ${p.exit}`, role: 1, data: ll }] };
       } },
 
     { id: 'macd', name: 'MACD Trend',
@@ -564,22 +599,14 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
                { key: 'sig', label: 'Signal', def: 9, min: 2, max: 50, step: 1 }],
       warmup: (p) => p.slow + p.sig,
       signals: (C, p) => {
-        const f = ema(C.c, p.fast), s = ema(C.c, p.slow), n = C.n;
-        const macd = new Float64Array(n).fill(NaN);
-        for (let i = 0; i < n; i++) if (isFinite(f[i]) && isFinite(s[i])) macd[i] = f[i] - s[i];
-        const first = macd.findIndex(isFinite);
-        const sigLine = new Float64Array(n).fill(NaN);
-        if (first >= 0) {
-          const k = 2 / (p.sig + 1); let e = 0, acc = 0, cnt = 0;
-          for (let i = first; i < n; i++) {
-            if (cnt < p.sig) { acc += macd[i]; cnt++; if (cnt === p.sig) { e = acc / p.sig; sigLine[i] = e; } }
-            else { e = macd[i] * k + e * (1 - k); sigLine[i] = e; }
-          }
-        }
+        const { macd, sigLine } = macdLines(C, p), n = C.n;
         const out = new Int8Array(n);
         for (let i = 0; i < n; i++) out[i] = (isFinite(macd[i]) && isFinite(sigLine[i]) && macd[i] > sigLine[i]) ? 1 : 0;
         return out;
-      } },
+      },
+      overlays: (C, p) => { const { macd, sigLine } = macdLines(C, p); return { sub: [   /* [DR-54] */
+        { label: 'MACD', role: 0, data: macd }, { label: 'Signal', role: 1, data: sigLine },
+      ], subLevels: [0] }; } },
   ];
   BT.strategies = STRATS;
   BT.strategy = (id) => STRATS.find(s => s.id === id);
@@ -600,12 +627,12 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const equity = new Float64Array(n);
     const trades = [];
     let cash = cap, qty = 0, pos = 0, entryIdx = -1, entryPx = 0, entryEq = 0, posBars = 0;
-    let hiSince = 0, peakEq = cap, blocked = false, forceExit = false;
+    let hiSince = 0, peakEq = cap, blocked = false, forceExit = false, entryFrac = 1;
 
     const doExit = (t, rawPx, reason) => {
       const px = rawPx * (1 - slip);
       cash += qty * px * (1 - fee);
-      trades.push({ entryIdx, exitIdx: t, entryPx, exitPx: px, ret: cash / entryEq - 1, reason });
+      trades.push({ entryIdx, exitIdx: t, entryPx, exitPx: px, ret: cash / entryEq - 1, reason, frac: entryFrac });
       qty = 0; pos = 0;
       if (reason !== 'signal') blocked = true;                                   /* [DR-49] re-entry needs flat signal */
     };
@@ -629,7 +656,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
           }
           const spend = cash * f;
           qty = (spend * (1 - fee)) / px;
-          cash -= spend; pos = 1; entryIdx = t; entryPx = px;
+          cash -= spend; pos = 1; entryIdx = t; entryPx = px; entryFrac = f;   /* [DR-53] */
           hiSince = C.o[t];
         }
       }
@@ -654,7 +681,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       if (!(equity[t] >= 0) || cash < -1e-9 || qty < 0) throw new Error('invariant violated @' + t); // [DR-11]
     }
     if (pos === 1) { // mark open trade to last close (unrealized)
-      trades.push({ entryIdx, exitIdx: n - 1, entryPx, exitPx: C.c[n - 1], ret: equity[n - 1] / entryEq - 1, open: true, reason: 'open' });
+      trades.push({ entryIdx, exitIdx: n - 1, entryPx, exitPx: C.c[n - 1], ret: equity[n - 1] / entryEq - 1, open: true, reason: 'open', frac: entryFrac });
     }
     const metrics = BT.metrics(equity, C, opts.barsPerYear ?? 365, warm, trades, posBars);
     return { equity, trades, metrics };
@@ -1330,7 +1357,7 @@ async function runBacktest() {
   try {
     if (!S.worker) S.worker = makeWorker();
     const res = await workerCall(S.worker, { cmd: 'run', bars: S.bars, stratId, params, opts });
-    S.lastResult = { res, stratId, params, opts, meta: S.meta, ts: S.bars.map(b => b[0]), closes: S.bars.map(b => b[4]), opens: S.bars.map(b => b[1]), highs: S.bars.map(b => b[2]), lows: S.bars.map(b => b[3]) };
+    S.lastResult = { res, stratId, params, opts, meta: S.meta, barsRef: S.bars, ts: S.bars.map(b => b[0]), closes: S.bars.map(b => b[4]), opens: S.bars.map(b => b[1]), highs: S.bars.map(b => b[2]), lows: S.bars.map(b => b[3]) };
     st.innerHTML = '';
     nav('results');            // must be visible BEFORE charts size themselves
     renderResults();
@@ -1390,13 +1417,25 @@ function drawEquityChartL(el, R) {
   lwcLine(chart, css('--s1'), pack(R.res.equity));
   chart.timeScale().fitContent();
 }
-function drawPriceChartL(el, R) {
+const OV_COLORS = () => [css('--s1'), css('--s2'), css('--muted')];               /* [DR-54] roles 0/1/2 */
+function ovLegend(el, series) {
+  el.innerHTML = series.map(s => `<span><span class="sw" style="background:${OV_COLORS()[s.role] || css('--muted')}"></span>${s.label}</span>`).join('');
+}
+function drawPriceChartL(el, R, ov) {
   const chart = lwcMake(el);
   const cs = chart.addSeries(LightweightCharts.CandlestickSeries, {
     upColor: css('--up'), downColor: css('--down'), wickUpColor: css('--up'), wickDownColor: css('--down'), borderVisible: false,
   });
   const t = R.ts;
   cs.setData(t.map((ms, i) => ({ time: Math.floor(ms / 1000), open: R.opens[i], high: R.highs[i], low: R.lows[i], close: R.closes[i] })));
+  for (const s of (ov && ov.price) || []) {                                      /* [DR-54] indicator overlays */
+    const line = chart.addSeries(LightweightCharts.LineSeries, {
+      color: OV_COLORS()[s.role] || css('--muted'), lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    const d = [];
+    for (let i = 0; i < s.data.length; i++) if (Number.isFinite(s.data[i])) d.push({ time: Math.floor(t[i] / 1000), value: s.data[i] });
+    line.setData(d);
+  }
   const REASON_TAG = { stop: 'SL', trail: 'TS', tp: 'TP', breaker: 'CB' };
   const markers = [];
   for (const tr of R.res.trades) {
@@ -1417,6 +1456,24 @@ function drawUnderwaterL(el, R) {
   const warm = R.res.warm, uw = R.res.tear.underwater, t = R.ts, d = [];
   for (let i = warm; i < uw.length; i++) d.push({ time: Math.floor(t[i] / 1000), value: uw[i] * 100 });
   s.setData(d);
+  chart.timeScale().fitContent();
+}
+function drawSubPanelL(el, R, ov) {                                              /* [DR-54] oscillator sub-panel */
+  const chart = lwcMake(el);
+  const t = R.ts;
+  let first = null;
+  for (const s of ov.sub) {
+    const line = chart.addSeries(LightweightCharts.LineSeries, {
+      color: OV_COLORS()[s.role] || css('--muted'), lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+    });
+    const d = [];
+    for (let i = 0; i < s.data.length; i++) if (Number.isFinite(s.data[i])) d.push({ time: Math.floor(t[i] / 1000), value: s.data[i] });
+    line.setData(d);
+    if (!first) first = line;
+  }
+  for (const lv of ov.subLevels || []) {
+    if (first) first.createPriceLine({ price: lv, color: css('--axis'), lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+  }
   chart.timeScale().fitContent();
 }
 function drawRollSharpeL(el, R) {
@@ -1478,6 +1535,20 @@ function renderResults() {
     <div class="card" style="padding:12px 14px">
       <b>${stratName}</b> <span class="note">on ${R.meta.demo ? 'DEMO ' : ''}${R.meta.symbol} ${R.meta.tf}</span>
       <div class="hint">${pTxt} · fee ${R.opts.feePct}%/side · slip ${R.opts.slipPct}% · ${fmtDate(R.ts[0])} → ${fmtDate(R.ts[R.ts.length - 1])}</div>
+      <div class="hint">${(() => {                                              /* [DR-49, DR-53] settings that produced these numbers */
+        const o = R.opts, bits = [];
+        if (o.stopLossPct) bits.push('SL ' + o.stopLossPct + '%');
+        if (o.takeProfitPct) bits.push('TP ' + o.takeProfitPct + '%');
+        if (o.trailStopPct) bits.push('TS ' + o.trailStopPct + '%');
+        if (o.maxDDStopPct) bits.push('CB ' + o.maxDDStopPct + '%');
+        const ex = bits.length ? 'exits: ' + bits.join(' / ') : 'exits: none';
+        if (o.sizing && o.sizing.mode === 'atr') {
+          const fr = R.res.trades.map(t => t.frac).filter(Number.isFinite);
+          const avg = fr.length ? fr.reduce((a, b) => a + b, 0) / fr.length : 1;
+          return ex + ` · sizing: ATR ${o.sizing.riskPct}% risk (avg position ${(avg * 100).toFixed(0)}% of equity)`;
+        }
+        return ex + ' · sizing: all-in';
+      })()}</div>
     </div>
     <div class="tiles">
       ${tile('Total return', fmtPct(m.totalReturn), m.totalReturn >= 0 ? 'pos' : 'neg', 'vs Buy&Hold ' + fmtPct(R.res.benchTotal) + ' (' + fmtPct(alpha) + ' alpha)')}
@@ -1506,8 +1577,10 @@ function renderResults() {
     <h2>Equity vs Buy &amp; Hold</h2>
     <div class="legend"><span><span class="sw" style="background:var(--s1)"></span>Strategy</span><span><span class="sw" style="background:var(--s2)"></span>Buy &amp; Hold</span></div>
     <div class="lwc" id="chEq"></div>
-    <h2>Price &amp; trades <span style="text-transform:none;letter-spacing:0">(▲ buy · ▼ sell — SL/TS/TP/CB mark protective exits)</span></h2>
+    <h2>Price, indicators &amp; trades <span style="text-transform:none;letter-spacing:0">(▲ buy · ▼ sell — SL/TS/TP/CB mark protective exits)</span></h2>
+    <div class="legend" id="pxLegend"></div>
     <div class="lwc" id="chPx"></div>
+    <div id="subWrap" style="display:none"><div class="legend" id="subLegend"></div><div class="lwc short" id="chSub"></div></div>
     <h2>Underwater (drawdown)</h2>
     <div class="lwc short" id="chDD"></div>
     <h2>Rolling Sharpe <span style="text-transform:none;letter-spacing:0">(${ts.rollWindow}-bar window)</span></h2>
@@ -1541,8 +1614,16 @@ function renderResults() {
         <td>${t.exitIdx - t.entryIdx}</td><td>${t.entryPx.toFixed(2)}</td><td>${t.exitPx.toFixed(2)}</td>
         <td class="${t.ret >= 0 ? 'pos' : 'neg'}">${fmtPct(t.ret, 2)}</td></tr>`).join('')}</tbody></table>
     </div>`;
+  const strat = BT.strategy(R.stratId);                                          /* [DR-54] */
+  const ov = strat.overlays ? strat.overlays(BT.colsFromBars(R.barsRef), R.params) : null;
   drawEquityChartL($('#chEq'), R);
-  drawPriceChartL($('#chPx'), R);
+  drawPriceChartL($('#chPx'), R, ov);
+  if (ov && ov.price) ovLegend($('#pxLegend'), ov.price);
+  if (ov && ov.sub) {
+    $('#subWrap').style.display = '';
+    ovLegend($('#subLegend'), ov.sub);
+    drawSubPanelL($('#chSub'), R, ov);
+  }
   drawUnderwaterL($('#chDD'), R);
   drawRollSharpeL($('#chRS'), R);
   renderMonthly($('#chMo'), R.res.monthly);
