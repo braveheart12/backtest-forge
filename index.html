@@ -102,6 +102,11 @@ nav button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width
 .progress{height:6px;background:var(--surface2);border-radius:99px;overflow:hidden;margin-top:10px}
 .progress i{display:block;height:100%;background:var(--s1);width:0%;transition:width .2s}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--axis);border-top-color:var(--s1);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+.chips{gap:6px}
+.chips .mini{opacity:.55}
+.chips .mini.chip-on{opacity:1;background:var(--s1);border-color:var(--s1);color:#fff}
+.mini.toggle{min-height:44px}
+.mini.toggle.on{background:var(--s1);border-color:var(--s1);color:#fff}
 @keyframes sp{to{transform:rotate(360deg)}}
 dialog{border:1px solid var(--ring);border-radius:16px;background:var(--surface);color:var(--ink);padding:18px;max-width:340px;width:calc(100vw - 48px)}
 dialog::backdrop{background:rgba(0,0,0,.6)}
@@ -195,6 +200,16 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <p class="note" style="margin-bottom:8px">Tests every combination in the ranges below and ranks them by Sharpe. Tap a result row to load those parameters.</p>
     <select id="swStratSel"></select>
     <div id="swBox"></div>
+    <label class="f">Optimize for</label>
+    <select id="swMetric">
+      <option value="sharpe" selected>Sharpe (risk-adjusted)</option>
+      <option value="totalReturn">Total return</option>
+      <option value="cagr">CAGR</option>
+      <option value="calmar">Calmar (return / drawdown)</option>
+      <option value="sortino">Sortino</option>
+    </select>
+    <label class="f">Out-of-sample check — fit on first 70%, test on last 30%</label>
+    <button class="mini toggle on" id="swOOS" type="button">ON — recommended</button>
     <div id="swWarn"></div>
     <button class="btn" id="swRunBtn">Run sweep</button>
     <button class="btn danger" id="swCancelBtn" style="display:none">Cancel sweep</button>
@@ -273,15 +288,88 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     for (let i = 0; i < n; i++) { s += src[i]; if (i >= p) s -= src[i - p]; if (i >= p - 1) out[i] = s / p; }
     return out;
   }
-  function ema(src, p) {
-    const n = src.length, out = new Float64Array(n).fill(NaN), k = 2 / (p + 1);
-    let e = 0, s = 0;
+  // EMA that tolerates a NaN head (needed for chained MAs) — seeds with SMA of the
+  // first p finite values, k = 2/(p+1). Identical to plain EMA on clean input. [DR-40]
+  function emaK(src, p, k) {
+    const n = src.length, out = new Float64Array(n).fill(NaN);
+    let f = 0; while (f < n && !isFinite(src[f])) f++;
+    if (f + p > n) return out;
+    let s = 0;
+    for (let i = f; i < f + p; i++) s += src[i];
+    let e = s / p; out[f + p - 1] = e;
+    for (let i = f + p; i < n; i++) { e = src[i] * k + e * (1 - k); out[i] = e; }
+    return out;
+  }
+  const ema = (src, p) => emaK(src, p, 2 / (p + 1));
+  const rma = (src, p) => emaK(src, p, 1 / p);                                  // Wilder [DR-40]
+  function wma(src, p) {                                                         // linear weights 1..p, incremental O(n) [DR-40]
+    const n = src.length, out = new Float64Array(n).fill(NaN), denom = p * (p + 1) / 2;
+    let f = 0; while (f < n && !isFinite(src[f])) f++;
+    if (f + p > n) return out;
+    let tot = 0, num = 0;
+    for (let i = f; i < f + p; i++) { tot += src[i]; num += (i - f + 1) * src[i]; }
+    out[f + p - 1] = num / denom;
+    for (let i = f + p; i < n; i++) { num += p * src[i] - tot; tot += src[i] - src[i - p]; out[i] = num / denom; }
+    return out;
+  }
+  function hma(src, p) {                                                         // WMA(2·WMA(p/2)−WMA(p), √p) [DR-40]
+    const half = wma(src, Math.max(1, Math.floor(p / 2))), full = wma(src, p);
+    const n = src.length, diff = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) if (isFinite(half[i]) && isFinite(full[i])) diff[i] = 2 * half[i] - full[i];
+    return wma(diff, Math.max(1, Math.round(Math.sqrt(p))));
+  }
+  function dema(src, p) {                                                        // 2E1−E2 [DR-40]
+    const e1 = ema(src, p), e2 = ema(e1, p), n = src.length, out = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) if (isFinite(e1[i]) && isFinite(e2[i])) out[i] = 2 * e1[i] - e2[i];
+    return out;
+  }
+  function tema(src, p) {                                                        // 3E1−3E2+E3 [DR-40]
+    const e1 = ema(src, p), e2 = ema(e1, p), e3 = ema(e2, p), n = src.length, out = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) if (isFinite(e1[i]) && isFinite(e2[i]) && isFinite(e3[i])) out[i] = 3 * e1[i] - 3 * e2[i] + e3[i];
+    return out;
+  }
+  function zlema(src, p) {                                                       // EMA of de-lagged series, lag=⌊(p−1)/2⌋ [DR-40]
+    const lag = Math.floor((p - 1) / 2), n = src.length, d = new Float64Array(n).fill(NaN);
+    for (let i = lag; i < n; i++) d[i] = 2 * src[i] - src[i - lag];
+    return ema(d, p);
+  }
+  function vwma(closes, vols, p) {                                               // Σ(c·v)/Σv rolling [DR-40]
+    const n = closes.length, out = new Float64Array(n).fill(NaN);
+    let pv = 0, vv = 0;
     for (let i = 0; i < n; i++) {
-      if (i < p) { s += src[i]; if (i === p - 1) { e = s / p; out[i] = e; } }
-      else { e = src[i] * k + e * (1 - k); out[i] = e; }
+      pv += closes[i] * vols[i]; vv += vols[i];
+      if (i >= p) { pv -= closes[i - p] * vols[i - p]; vv -= vols[i - p]; }
+      if (i >= p - 1) out[i] = vv > 0 ? pv / vv : out[i - 1];
     }
     return out;
   }
+  function kama(src, p) {                                                        // ER window p, fixed 2/30 constants [DR-40]
+    const n = src.length, out = new Float64Array(n).fill(NaN);
+    const fast = 2 / (2 + 1), slow = 2 / (30 + 1);
+    if (p + 1 > n) return out;
+    let k = src[p]; out[p] = k;
+    for (let i = p + 1; i < n; i++) {
+      let vol = 0;
+      for (let j = i - p + 1; j <= i; j++) vol += Math.abs(src[j] - src[j - 1]);
+      const er = vol > 0 ? Math.abs(src[i] - src[i - p]) / vol : 0;
+      const sc = Math.pow(er * (fast - slow) + slow, 2);
+      k = k + sc * (src[i] - k); out[i] = k;
+    }
+    return out;
+  }
+  const MA_TYPES = ['SMA', 'EMA', 'WMA', 'HMA', 'RMA', 'DEMA', 'TEMA', 'ZLEMA', 'VWMA', 'KAMA'];  /* [DR-40] */
+  function maOf(type, C, p) {
+    switch (type) {
+      case 'SMA': return sma(C.c, p);   case 'EMA': return ema(C.c, p);
+      case 'WMA': return wma(C.c, p);   case 'HMA': return hma(C.c, p);
+      case 'RMA': return rma(C.c, p);   case 'DEMA': return dema(C.c, p);
+      case 'TEMA': return tema(C.c, p); case 'ZLEMA': return zlema(C.c, p);
+      case 'VWMA': return vwma(C.c, C.v, p); case 'KAMA': return kama(C.c, p);
+      default: return sma(C.c, p);
+    }
+  }
+  BT.maTypes = MA_TYPES;
+  BT.ma = maOf;
   function rsi(src, p) { // Wilder
     const n = src.length, out = new Float64Array(n).fill(NaN);
     let ag = 0, al = 0;
@@ -300,22 +388,13 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     { id: 'buyhold', name: 'Buy & Hold', params: [], warmup: () => 0,
       signals: (C) => new Int8Array(C.n).fill(1) },
 
-    { id: 'smax', name: 'SMA Cross',
-      params: [{ key: 'fast', label: 'Fast SMA', def: 20, min: 2, max: 200, step: 1 },
-               { key: 'slow', label: 'Slow SMA', def: 50, min: 3, max: 400, step: 1 }],
-      warmup: (p) => Math.max(p.fast, p.slow),
+    { id: 'macross', name: 'MA Cross',
+      params: [{ key: 'type', label: 'MA type', type: 'select', options: MA_TYPES, def: 'SMA' },  /* [DR-40] */
+               { key: 'fast', label: 'Fast period', def: 20, min: 2, max: 200, step: 1 },
+               { key: 'slow', label: 'Slow period', def: 50, min: 3, max: 400, step: 1 }],
+      warmup: (p) => Math.max(p.fast, p.slow) * 3 + 5,   // chained MAs (HMA/DEMA/TEMA) need a longer head
       signals: (C, p) => {
-        const f = sma(C.c, p.fast), s = sma(C.c, p.slow), out = new Int8Array(C.n);
-        for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
-        return out;
-      } },
-
-    { id: 'emax', name: 'EMA Cross',
-      params: [{ key: 'fast', label: 'Fast EMA', def: 12, min: 2, max: 200, step: 1 },
-               { key: 'slow', label: 'Slow EMA', def: 26, min: 3, max: 400, step: 1 }],
-      warmup: (p) => Math.max(p.fast, p.slow),
-      signals: (C, p) => {
-        const f = ema(C.c, p.fast), s = ema(C.c, p.slow), out = new Int8Array(C.n);
+        const f = maOf(p.type, C, p.fast), s = maOf(p.type, C, p.slow), out = new Int8Array(C.n);
         for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
         return out;
       } },
@@ -506,7 +585,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       results.push({ params: p, m: r.metrics });
       if (onProgress && (i % 5 === 0)) onProgress(i + 1, combos.length);
     }
-    results.sort((a, b) => (b.m.sharpe - a.m.sharpe));
+    const key = opts.sortKey || 'sharpe';                                        /* [DR-41] */
+    results.sort((a, b) => ((b.m[key] ?? -Infinity) - (a.m[key] ?? -Infinity)));
     return { results, stopped: false, done: combos.length, total: combos.length };
   };
 
@@ -617,9 +697,23 @@ self.onmessage = function (e) {
         benchTotal: bench[C.n - 1] / bench[0] - 1 });
     } else if (m.cmd === 'sweep') {
       const t0 = performance.now();
-      const sw = BT.sweep(m.bars, m.stratId, m.grids, m.opts,
+      const split = m.splitPct ? Math.floor(m.bars.length * m.splitPct) : m.bars.length;   /* [DR-42] */
+      const isBars = split < m.bars.length ? m.bars.slice(0, split) : m.bars;
+      const sw = BT.sweep(isBars, m.stratId, m.grids, m.opts,
         (done, total) => self.postMessage({ id: m.id, kind: 'progress', done, total }));
-      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results: sw.results.slice(0, 200).map(r => ({ params: r.params, m: r.m })), total: sw.total, ms: performance.now() - t0 });
+      let results = sw.results.slice(0, 100).map(r => ({ params: r.params, m: r.m }));
+      if (split < m.bars.length) {                       // OOS pass on held-out tail, own warmup [DR-42]
+        const strat = BT.strategy(m.stratId);
+        const Coos = BT.colsFromBars(m.bars.slice(split));
+        results = results.map(r => {
+          try {
+            const sig = strat.signals(Coos, r.params);
+            const rr = BT.run(Coos, sig, Object.assign({}, m.opts, { warmup: strat.warmup(r.params) }));
+            return { params: r.params, m: r.m, oos: rr.metrics };
+          } catch (err) { return { params: r.params, m: r.m, oos: null }; }
+        });
+      }
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, ms: performance.now() - t0 });
     }
   } catch (err) { self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) }); }
 };`;
@@ -655,6 +749,8 @@ function nav(name) {
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-nav]');
   if (b) nav(b.dataset.nav);
+  const chip = e.target.closest('[data-chip]');
+  if (chip) chip.classList.toggle('chip-on');
 });
 
 /* ---------------- symbol normalization [DR-13] ---------------- */
@@ -844,8 +940,7 @@ async function renderDsList() {
 /* ---------------- strategy screen [DR-30, DR-31] ---------------- */
 const STRAT_HINTS = {
   buyhold: 'Buys at the start and holds. The baseline everything else must beat.',
-  smax: 'In the market while the fast average is above the slow one. Classic trend-following.',
-  emax: 'Like SMA cross but averages react faster to recent prices.',
+  macross: 'In the market while the fast average is above the slow one. Pick from 10 MA types — SMA is the classic; HMA/TEMA react faster, RMA/KAMA are smoother.',
   rsimr: 'Buys after sharp dips (RSI low), exits after recovery. Mean-reversion.',
   donch: 'Buys new highs, exits new lows. Breakout trend-following.',
   macd: 'In the market while MACD momentum is positive.',
@@ -858,15 +953,21 @@ function renderParams() {
   $('#stratHint').textContent = STRAT_HINTS[s.id] || '';
   const box = $('#paramBox'); box.innerHTML = '';
   for (const p of s.params) {
-    box.insertAdjacentHTML('beforeend', `
-      <label class="f">${p.label}</label>
-      <input type="number" data-param="${p.key}" value="${p.def}" min="${p.min}" max="${p.max}" step="${p.step}" inputmode="numeric">`);
+    if (p.type === 'select') {                                                   /* [DR-40] */
+      box.insertAdjacentHTML('beforeend', `
+        <label class="f">${p.label}</label>
+        <select data-param="${p.key}" data-kind="select">${p.options.map(o => `<option${o === p.def ? ' selected' : ''}>${o}</option>`).join('')}</select>`);
+    } else {
+      box.insertAdjacentHTML('beforeend', `
+        <label class="f">${p.label}</label>
+        <input type="number" data-param="${p.key}" value="${p.def}" min="${p.min}" max="${p.max}" step="${p.step}" inputmode="numeric">`);
+    }
   }
   validateParams();
 }
 function readParams(root) {
   const out = {};
-  $$('[data-param]', root).forEach(i => out[i.dataset.param] = +i.value);
+  $$('[data-param]', root).forEach(i => out[i.dataset.param] = i.dataset.kind === 'select' ? i.value : +i.value);
   return out;
 }
 function validateParams() {
@@ -875,6 +976,7 @@ function validateParams() {
   const warn = $('#paramWarn'); warn.innerHTML = '';
   let ok = true;
   for (const q of s.params) {
+    if (q.type === 'select') continue;                                           /* [DR-40] */
     const v = p[q.key];
     if (!Number.isFinite(v) || v < q.min || v > q.max) { warn.innerHTML = `<div class="errline">✕ &nbsp;${q.label} must be between ${q.min} and ${q.max}.</div>`; ok = false; }
   }
@@ -1191,6 +1293,14 @@ function renderSweepBox() {
   const box = $('#swBox'); box.innerHTML = '';
   if (!s.params.length) { box.innerHTML = '<p class="hint">Buy &amp; Hold has no parameters to sweep — pick another strategy.</p>'; return; }
   for (const p of s.params) {
+    if (p.type === 'select') {                                                   /* [DR-40] sweep across MA types */
+      const defaultOn = ['SMA', 'EMA', 'WMA', 'HMA'];
+      box.insertAdjacentHTML('beforeend', `
+        <label class="f">${p.label} — include in sweep</label>
+        <div class="row chips" data-swsel="${p.key}">${p.options.map(o =>
+          `<button class="mini${defaultOn.includes(o) ? ' chip-on' : ''}" data-chip="${o}">${o}</button>`).join('')}</div>`);
+      continue;
+    }
     const from = Math.max(p.min, Math.round(p.def * 0.5));
     const to = Math.min(p.max, Math.round(p.def * 1.6));
     const step = Math.max(p.step, Math.round((to - from) / 5) || p.step);
@@ -1206,6 +1316,12 @@ function renderSweepBox() {
 function sweepGrids() {
   const grids = {};
   let combos = 1;
+  for (const sel of $$('[data-swsel]')) {                                        /* [DR-40] */
+    const on = $$('.chip-on', sel).map(b => b.dataset.chip);
+    if (!on.length) return { err: 'Pick at least one MA type to include.' };
+    grids[sel.dataset.swsel] = on;
+    combos *= on.length;
+  }
   for (const row of $$('[data-sw]')) {
     const from = +$('[data-r=from]', row).value, to = +$('[data-r=to]', row).value, step = +$('[data-r=step]', row).value;
     if (!(step > 0) || !(to >= from)) return { err: 'Each range needs from ≤ to and step > 0.' };
@@ -1223,7 +1339,9 @@ async function runSweep() {
   if (g.err) { warn.innerHTML = `<div class="errline">✕ &nbsp;${g.err}</div>`; return; }
   const stratId = $('#swStratSel').value;
   if (!BT.strategy(stratId).params.length) { warn.innerHTML = '<div class="errline">✕ &nbsp;Nothing to sweep for Buy &amp; Hold.</div>'; return; }
-  const opts = { feePct: +$('#feeIn').value, slipPct: +$('#slipIn').value, capital: +$('#capIn').value, barsPerYear: BT.barsPerYear(BT.TF_SECONDS[S.meta.tf]) };
+  const sortKey = $('#swMetric').value;                                          /* [DR-41] */
+  const useOOS = $('#swOOS').classList.contains('on');                           /* [DR-42] */
+  const opts = { feePct: +$('#feeIn').value, slipPct: +$('#slipIn').value, capital: +$('#capIn').value, barsPerYear: BT.barsPerYear(BT.TF_SECONDS[S.meta.tf]), sortKey };
   $('#swRunBtn').style.display = 'none'; $('#swCancelBtn').style.display = ''; $('#swProg').style.display = '';
   $('#swStatus').textContent = `0 / ${g.combos} combinations…`;
   S.sweepWorker = makeWorker();
@@ -1231,24 +1349,32 @@ async function runSweep() {
   let cancelled = false;
   $('#swCancelBtn').onclick = () => { cancelled = true; S.sweepWorker.terminate(); S.sweepWorker = null; endSweep(); $('#swStatus').textContent = 'Sweep cancelled — nothing was saved. Adjust ranges and run again.'; };
   function endSweep() { $('#swRunBtn').style.display = ''; $('#swCancelBtn').style.display = 'none'; $('#swProg').style.display = 'none'; }
+  const METRIC_LABEL = { sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
+  const fmtM = (key, v) => v == null ? '—' : (key === 'totalReturn' || key === 'cagr') ? fmtPct(v) : fmtNum(v);
   try {
-    const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: S.bars, stratId, grids: g.grids, opts },
+    const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: S.bars, stratId, grids: g.grids, opts, splitPct: useOOS ? 0.7 : 0 },
       (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `${done} / ${total} combinations…`; });
     if (cancelled) return;
     endSweep();
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    $('#swStatus').textContent = `${res.results.length} valid results in ${secs}s — ranked by Sharpe. Degenerate combos (fast ≥ slow) were skipped.`;
+    const lbl = METRIC_LABEL[sortKey];
+    $('#swStatus').textContent = `${res.results.length} valid results in ${secs}s — ranked by ${lbl}${useOOS ? ' on the first 70%; “OOS” columns show the untouched last 30%' : ''}. Degenerate combos (fast ≥ slow) skipped.`;
     $('#swResults').innerHTML = `
       <div class="card scrollx" style="padding:6px 10px">
-      <table><thead><tr><th>Params</th><th>Return</th><th>Sharpe</th><th>Max DD</th><th>Trades</th></tr></thead>
+      <table><thead><tr><th>Params</th><th>${lbl}</th><th>Return</th>${useOOS ? `<th>OOS ${lbl}</th><th>OOS Ret</th>` : '<th>Max DD</th>'}<th>Trades</th></tr></thead>
       <tbody>${res.results.slice(0, 50).map(r => `
         <tr class="tap" data-p='${JSON.stringify(r.params)}'>
-          <td>${Object.entries(r.params).map(([k, v]) => k + ' ' + v).join(' · ')}</td>
+          <td>${Object.entries(r.params).map(([k, v]) => (k === 'type' ? v : k + ' ' + v)).join(' · ')}</td>
+          <td><b style="color:var(--ink)">${fmtM(sortKey, r.m[sortKey])}</b></td>
           <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}</td>
-          <td><b style="color:var(--ink)">${fmtNum(r.m.sharpe)}</b></td>
-          <td class="neg">${fmtPctU(r.m.maxDrawdown)}</td><td>${r.m.trades}</td></tr>`).join('')}</tbody></table>
+          ${useOOS ? `<td>${fmtM(sortKey, r.oos && r.oos[sortKey])}</td>
+          <td class="${r.oos && r.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${r.oos ? fmtPct(r.oos.totalReturn) : '—'}</td>`
+          : `<td class="neg">${fmtPctU(r.m.maxDrawdown)}</td>`}
+          <td>${r.m.trades}</td></tr>`).join('')}</tbody></table>
       </div>
-      <p class="hint">Tap a row to load its parameters into the Strategy tab. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting).</p>`;
+      <p class="hint">${useOOS
+        ? 'In-sample columns are the fit; <b>OOS columns are the honest test</b> — parameters that shine in-sample but collapse out-of-sample are overfit. Tap a row to load its parameters.'
+        : 'Tap a row to load its parameters. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting). Turn on the out-of-sample check for an honest test.'}</p>`;
     $$('#swResults tr.tap').forEach(tr => tr.onclick = () => {
       const p = JSON.parse(tr.dataset.p);
       $('#stratSel').value = stratId; renderParams();
@@ -1292,8 +1418,8 @@ async function selfTest() {
 async function boot() {
   fillStratSelect($('#stratSel'));
   fillStratSelect($('#swStratSel'));
-  $('#stratSel').value = 'smax';   // trend-following default beats a do-nothing first run
-  $('#swStratSel').value = 'smax';
+  $('#stratSel').value = 'macross';   // trend-following default beats a do-nothing first run
+  $('#swStratSel').value = 'macross';
   renderParams(); renderSweepBox();
 
   $('#stratSel').onchange = renderParams;
@@ -1314,6 +1440,11 @@ async function boot() {
     $('#symCustom').style.display = custom ? '' : 'none';
     $('#symHint').textContent = custom ? 'Format: BASE/QUOTE — btcusdt, BTC-USDT and btc/usdt all work.' : '';
     if (custom) $('#symCustom').focus();
+  };
+  $('#swOOS').onclick = () => {
+    const b = $('#swOOS');
+    b.classList.toggle('on');
+    b.textContent = b.classList.contains('on') ? 'ON — recommended' : 'OFF — in-sample only';
   };
   $('#selfTestBtn').onclick = selfTest;
   $('#proxySave').onclick = async () => {
