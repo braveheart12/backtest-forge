@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.4</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.5</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -307,7 +307,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.4</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.5</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -543,7 +543,10 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       params: [{ key: 'type', label: 'MA type', type: 'select', options: MA_TYPES, def: 'SMA' },  /* [DR-40] */
                { key: 'fast', label: 'Fast period', def: 20, min: 2, max: 200, step: 1 },
                { key: 'slow', label: 'Slow period', def: 50, min: 3, max: 400, step: 1 }],
-      warmup: (p) => Math.max(p.fast, p.slow) * 3 + 5,   // chained MAs (HMA/DEMA/TEMA) need a longer head
+      warmup: (p) => {                                    // type-aware [DR-57]: chained MAs need longer heads
+        const mult = { SMA: 1, WMA: 1, VWMA: 1, EMA: 1, RMA: 1, ZLEMA: 1.5, HMA: 1.2, KAMA: 1.2, DEMA: 2, TEMA: 3 }[p.type] || 3;
+        return Math.ceil(Math.max(p.fast, p.slow) * mult) + 10;
+      },
       signals: (C, p) => {
         const f = maOf(p.type, C, p.fast), s = maOf(p.type, C, p.slow), out = new Int8Array(C.n);
         for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
@@ -717,9 +720,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   };
 
   // Benchmark buy & hold overlay: close-to-close basis (AC-3 ground truth) [DR-35]
-  BT.benchmark = function (C, capital) {
+  // start: rebase bar so bench[start] == capital — the strategy's warm-up bar [DR-57]
+  BT.benchmark = function (C, capital, start) {
+    const s = start || 0;
     const eq = new Float64Array(C.n);
-    for (let i = 0; i < C.n; i++) eq[i] = capital * C.c[i] / C.c[0];
+    for (let i = 0; i < C.n; i++) eq[i] = capital * C.c[i] / C.c[s];
     return eq;
   };
 
@@ -890,25 +895,27 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const C = bars.n ? bars : colsFromBars(bars);
     const strat = BT.strategy(stratId);
     const mask = BT.gateMask(C, opts.filters), fWarm = BT.filterWarmup(opts.filters);   /* [DR-56] once per grid */
+    let commonWarm = fWarm;                                                              /* [DR-57] shared window */
     const keys = Object.keys(grids);
     const combos = [];
     (function rec(idx, acc) {
       if (idx === keys.length) { combos.push({ ...acc }); return; }
       for (const val of grids[keys[idx]]) { acc[keys[idx]] = val; rec(idx + 1, acc); }
     })(0, {});
+    const valid = combos.filter(p => !(p.fast !== undefined && p.slow !== undefined && p.fast >= p.slow));  // degenerate out
+    for (const p of valid) commonWarm = Math.max(commonWarm, strat.warmup(p));   /* [DR-57] one window for all */
     const results = [];
-    for (let i = 0; i < combos.length; i++) {
-      if (shouldStop && shouldStop()) return { results, stopped: true, done: i, total: combos.length };
-      const p = combos[i];
-      if (p.fast !== undefined && p.slow !== undefined && p.fast >= p.slow) continue; // degenerate
+    for (let i = 0; i < valid.length; i++) {
+      if (shouldStop && shouldStop()) return { results, stopped: true, done: i, total: valid.length, commonWarm };
+      const p = valid[i];
       const sig = BT.andSig(strat.signals(C, p), mask);                          /* [DR-56] */
-      const r = BT.run(C, sig, { ...opts, warmup: Math.max(strat.warmup(p), fWarm) });
+      const r = BT.run(C, sig, { ...opts, warmup: commonWarm });
       results.push({ params: p, m: r.metrics });
-      if (onProgress && (i % 5 === 0)) onProgress(i + 1, combos.length);
+      if (onProgress && (i % 5 === 0)) onProgress(i + 1, valid.length);
     }
     const key = opts.sortKey || 'sharpe';                                        /* [DR-41] */
     results.sort((a, b) => ((b.m[key] ?? -Infinity) - (a.m[key] ?? -Infinity)));
-    return { results, stopped: false, done: combos.length, total: combos.length };
+    return { results, stopped: false, done: valid.length, total: valid.length, commonWarm };
   };
 
   /* ---------- validation methodology [DR-45, DR-46, DR-47] ---------- */
@@ -1067,13 +1074,13 @@ self.onmessage = function (e) {
       const warm = Math.max(strat.warmup(m.params), BT.filterWarmup(m.opts.filters));   /* [DR-56] */
       const sig = BT.andSig(strat.signals(C, m.params), BT.gateMask(C, m.opts.filters));
       const r = BT.run(C, sig, Object.assign({}, m.opts, { warmup: warm }));
-      const bench = BT.benchmark(C, m.opts.capital);
+      const bench = BT.benchmark(C, m.opts.capital, warm);                       /* [DR-57] same window as strategy */
       const monthly = BT.monthlyReturns(r.equity, C.ts, warm);
       const tear = BT.tearsheet(r.equity, C, m.opts.barsPerYear || 365, warm, r.trades, monthly);  /* [DR-50] */
       self.postMessage({ id: m.id, ok: true, kind: 'run',
         equity: Array.from(r.equity), bench: Array.from(bench), trades: r.trades,
         metrics: r.metrics, monthly, tear, warm,
-        benchTotal: bench[C.n - 1] / bench[0] - 1 });
+        benchTotal: bench[C.n - 1] / bench[warm] - 1 });                          /* [DR-57] */
     } else if (m.cmd === 'sweep') {
       const t0 = performance.now();
       const split = m.splitPct ? Math.floor(m.bars.length * m.splitPct) : m.bars.length;   /* [DR-42] */
@@ -1088,7 +1095,7 @@ self.onmessage = function (e) {
         });
       }
       const Cis = BT.colsFromBars(isBars);
-      const benchIS = Cis.c[Cis.n - 1] / Cis.c[0] - 1;                    /* [DR-44, close-basis DR-35] */
+      const benchIS = Cis.c[Cis.n - 1] / Cis.c[Math.min(sw.commonWarm, Cis.n - 1)] - 1;   /* [DR-44, DR-57 same window as combos] */
       let benchOOS = null;
       if (split < m.bars.length) {
         const Co = BT.colsFromBars(m.bars.slice(split));
@@ -1657,7 +1664,7 @@ function renderResults() {
     ${demoNote}
     <div class="card" style="padding:12px 14px">
       <b>${stratName}</b> <span class="note">on ${R.meta.demo ? 'DEMO ' : ''}${R.meta.symbol} ${R.meta.tf}</span>
-      <div class="hint">${pTxt} · fee ${R.opts.feePct}%/side · slip ${R.opts.slipPct}% · ${fmtDate(R.ts[0])} → ${fmtDate(R.ts[R.ts.length - 1])}</div>
+      <div class="hint">${pTxt} · fee ${R.opts.feePct}%/side · slip ${R.opts.slipPct}% · analysis ${fmtDate(R.ts[R.res.warm])} → ${fmtDate(R.ts[R.ts.length - 1])} (${R.res.warm}-bar warm-up excluded; B&amp;H measured over the same window)</div>
       <div class="hint">${(() => {                                              /* [DR-49, DR-53] settings that produced these numbers */
         const o = R.opts, bits = [];
         if (o.stopLossPct) bits.push('SL ' + o.stopLossPct + '%');
