@@ -114,7 +114,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v1.3</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v1.4</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -208,8 +208,13 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <option value="calmar">Calmar (return / drawdown)</option>
       <option value="sortino">Sortino</option>
     </select>
-    <label class="f">Out-of-sample check — fit on first 70%, test on last 30%</label>
-    <button class="mini toggle on" id="swOOS" type="button">ON — recommended</button>
+    <label class="f">Validation</label>
+    <select id="swVal">
+      <option value="split" selected>70/30 split — fit early data, test late data</option>
+      <option value="wfa">Walk-forward — 5 windows, re-optimized (most robust)</option>
+      <option value="none">None — in-sample only (least honest)</option>
+    </select>
+    <div class="hint" id="swValHint"></div>
     <div id="swWarn"></div>
     <button class="btn" id="swRunBtn">Run sweep</button>
     <button class="btn danger" id="swCancelBtn" style="display:none">Cancel sweep</button>
@@ -246,7 +251,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v1.3</b> · long-only · data via ccxt/Binance · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v1.4</b> · long-only · data via ccxt/Binance · not investment advice</p>
 </section>
 </main>
 
@@ -591,6 +596,56 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return { results, stopped: false, done: combos.length, total: combos.length };
   };
 
+  /* ---------- validation methodology [DR-45, DR-46, DR-47] ---------- */
+  BT.invNorm = function (p) {           // Acklam's inverse normal CDF approximation [DR-46]
+    if (p <= 0 || p >= 1) return p <= 0 ? -Infinity : Infinity;
+    const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.3577518672690, -30.66479806614716, 2.506628277459239];
+    const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+    const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+    const pl = 0.02425;
+    let q, r;
+    if (p < pl) { q = Math.sqrt(-2 * Math.log(p)); return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+    if (p > 1 - pl) { q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+    q = p - 0.5; r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  };
+  BT.expectedMaxSharpe = function (nTrials, varSR) {                             /* [DR-46] */
+    if (!(nTrials >= 2) || !(varSR > 0)) return 0;
+    const g = 0.5772156649;
+    return Math.sqrt(varSR) * ((1 - g) * BT.invNorm(1 - 1 / nTrials) + g * BT.invNorm(1 - 1 / (nTrials * Math.E)));
+  };
+  // OOS run with warm-up lead taken from BEFORE the test window [DR-47]
+  BT.runOOS = function (bars, from, to, stratId, params, opts) {
+    const strat = BT.strategy(stratId);
+    const lead = Math.min(from, strat.warmup(params));
+    const C = BT.colsFromBars(bars.slice(from - lead, to));
+    const sig = strat.signals(C, params);
+    const r = BT.run(C, sig, { ...opts, warmup: lead });
+    const bench = C.c[C.n - 1] / C.c[lead] - 1;                                  // B&H inside the window, close basis [DR-35]
+    return { metrics: r.metrics, bench, lead };
+  };
+  BT.walkForward = function (bars, stratId, grids, opts, nWin, minTrain, onProg) {   /* [DR-45] */
+    nWin = nWin || 5; minTrain = minTrain == null ? 0.4 : minTrain;
+    const n = bars.length, start = Math.floor(n * minTrain);
+    const segLen = Math.floor((n - start) / nWin);
+    const windows = [];
+    let stitched = 1, stitchedBench = 1;
+    for (let w = 0; w < nWin; w++) {
+      const s = start + w * segLen, e = (w === nWin - 1) ? n : s + segLen;
+      const sw = BT.sweep(bars.slice(0, s), stratId, grids, opts,
+        onProg ? (d, t) => onProg(w, d, t) : null);
+      if (!sw.results.length) { windows.push(null); continue; }
+      const best = sw.results[0];
+      const oos = BT.runOOS(bars, s, e, stratId, best.params, opts);
+      stitched *= 1 + oos.metrics.totalReturn;
+      stitchedBench *= 1 + oos.bench;
+      windows.push({ from: bars[s][0], to: bars[e - 1][0], params: best.params, is: best.m, oos: oos.metrics, bench: oos.bench });
+    }
+    const sets = new Set(windows.filter(Boolean).map(w => JSON.stringify(w.params)));
+    return { windows, stitched: stitched - 1, stitchedBench: stitchedBench - 1, distinctParams: sets.size, nWin, start, segLen };
+  };
+
   /* ---------- deterministic demo data [DR-22] ---------- */
   function mulberry32(seed) { return function () { let t = seed += 0x6D2B79F5; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
   BT.demoDataset = function (kind) {
@@ -703,15 +758,10 @@ self.onmessage = function (e) {
       const sw = BT.sweep(isBars, m.stratId, m.grids, m.opts,
         (done, total) => self.postMessage({ id: m.id, kind: 'progress', done, total }));
       let results = sw.results.slice(0, 100).map(r => ({ params: r.params, m: r.m }));
-      if (split < m.bars.length) {                       // OOS pass on held-out tail, own warmup [DR-42]
-        const strat = BT.strategy(m.stratId);
-        const Coos = BT.colsFromBars(m.bars.slice(split));
+      if (split < m.bars.length) {                       // OOS pass with pre-window warm-up lead [DR-42, DR-47]
         results = results.map(r => {
-          try {
-            const sig = strat.signals(Coos, r.params);
-            const rr = BT.run(Coos, sig, Object.assign({}, m.opts, { warmup: strat.warmup(r.params) }));
-            return { params: r.params, m: r.m, oos: rr.metrics };
-          } catch (err) { return { params: r.params, m: r.m, oos: null }; }
+          try { return { params: r.params, m: r.m, oos: BT.runOOS(m.bars, split, m.bars.length, m.stratId, r.params, m.opts).metrics }; }
+          catch (err) { return { params: r.params, m: r.m, oos: null }; }
         });
       }
       const Cis = BT.colsFromBars(isBars);
@@ -721,7 +771,17 @@ self.onmessage = function (e) {
         const Co = BT.colsFromBars(m.bars.slice(split));
         benchOOS = Co.c[Co.n - 1] / Co.c[0] - 1;
       }
-      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, ms: performance.now() - t0 });
+      /* selection-bias stats over ALL trials [DR-46] */
+      const srs = sw.results.map(r => r.m.sharpe).filter(Number.isFinite);
+      const mean = srs.length ? srs.reduce((a, b) => a + b, 0) / srs.length : 0;
+      const varSR = srs.length > 1 ? srs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / srs.length : 0;
+      const trialStats = { n: srs.length, maxSharpe: srs.length ? Math.max.apply(null, srs) : 0, varSharpe: varSR };
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, ms: performance.now() - t0 });
+    } else if (m.cmd === 'wfa') {                        /* [DR-45] */
+      const t0 = performance.now();
+      const wf = BT.walkForward(m.bars, m.stratId, m.grids, m.opts, 5, 0.4,
+        (w, d, t) => self.postMessage({ id: m.id, kind: 'progress', done: w * t + d, total: 5 * t }));
+      self.postMessage({ id: m.id, ok: true, kind: 'wfa', wf, ms: performance.now() - t0 });
     }
   } catch (err) { self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) }); }
 };`;
@@ -1348,7 +1408,8 @@ async function runSweep() {
   const stratId = $('#swStratSel').value;
   if (!BT.strategy(stratId).params.length) { warn.innerHTML = '<div class="errline">✕ &nbsp;Nothing to sweep for Buy &amp; Hold.</div>'; return; }
   const sortKey = $('#swMetric').value;                                          /* [DR-41] */
-  const useOOS = $('#swOOS').classList.contains('on');                           /* [DR-42] */
+  const valMode = $('#swVal').value;                                             /* [DR-42, DR-45] */
+  const useOOS = valMode === 'split';
   const opts = { feePct: +$('#feeIn').value, slipPct: +$('#slipIn').value, capital: +$('#capIn').value, barsPerYear: BT.barsPerYear(BT.TF_SECONDS[S.meta.tf]), sortKey };
   $('#swRunBtn').style.display = 'none'; $('#swCancelBtn').style.display = ''; $('#swProg').style.display = '';
   $('#swStatus').textContent = `0 / ${g.combos.toLocaleString()} combinations…` +
@@ -1361,6 +1422,44 @@ async function runSweep() {
   const METRIC_LABEL = { sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
   const fmtM = (key, v) => v == null ? '—' : (key === 'totalReturn' || key === 'cagr') ? fmtPct(v) : fmtNum(v);
   try {
+    if (valMode === 'wfa') {                                                     /* [DR-45] */
+      const res = await workerCall(S.sweepWorker, { cmd: 'wfa', bars: S.bars, stratId, grids: g.grids, opts },
+        (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `Walk-forward: window ${Math.min(5, Math.floor(done / (total / 5)) + 1)} of 5…`; });
+      if (cancelled) return;
+      endSweep();
+      const wf = res.wf, secs = ((performance.now() - t0) / 1000).toFixed(1);
+      const wins = wf.windows.filter(Boolean);
+      const beatCount = wins.filter(w => w.oos.totalReturn > w.bench).length;
+      const stitchWins = wf.stitched > wf.stitchedBench;
+      $('#swStatus').textContent = `Walk-forward done in ${secs}s — grid re-optimized ${wf.nWin}× on expanding history, each winner tested on the next unseen window.`;
+      $('#swResults').innerHTML = `
+        <div class="card" id="swBench" style="padding:12px 14px">
+          <b>Stitched out-of-sample:</b> <span class="${wf.stitched >= 0 ? 'pos' : 'neg'}">${fmtPct(wf.stitched)}</span>
+          vs Buy &amp; Hold <span class="${wf.stitchedBench >= 0 ? 'pos' : 'neg'}">${fmtPct(wf.stitchedBench)}</span> over the same windows —
+          <b>${stitchWins ? 'the strategy wins' : 'holding wins'}</b>.
+          <div class="hint">${beatCount} of ${wins.length} windows beat B&amp;H. ${wf.distinctParams === 1
+            ? 'The SAME parameters won every window — a strong stability signal.'
+            : wf.distinctParams + ' different parameter sets won across ' + wins.length + ' windows — ' + (wf.distinctParams >= wins.length ? 'no stability: each era wanted different settings (a classic overfitting tell).' : 'moderate stability.')}</div>
+        </div>
+        <div class="card scrollx" style="padding:6px 10px">
+        <table><thead><tr><th>Window</th><th>Winner (re-fit)</th><th>OOS Ret</th><th>B&amp;H</th></tr></thead>
+        <tbody>${wf.windows.map((w, i) => w ? `
+          <tr class="tap" data-p='${JSON.stringify(w.params)}'>
+            <td>${fmtDate(w.from).slice(2)}→${fmtDate(w.to).slice(2)}</td>
+            <td>${Object.entries(w.params).map(([k, v]) => (k === 'type' ? v : v)).join('/')}</td>
+            <td class="${w.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(w.oos.totalReturn)}${w.oos.totalReturn > w.bench ? ' ✓' : ''}</td>
+            <td class="${w.bench >= 0 ? 'pos' : 'neg'}">${fmtPct(w.bench)}</td></tr>` : `<tr><td colspan="4">window ${i + 1}: no valid combos</td></tr>`).join('')}</tbody></table>
+        </div>
+        <p class="hint">✓ = beat Buy &amp; Hold in that unseen window. Tap a row to load that window’s winning parameters. Judge the strategy on the stitched result and the stability note — not on any single window.</p>`;
+      $$('#swResults tr.tap').forEach(tr => tr.onclick = () => {
+        const p = JSON.parse(tr.dataset.p);
+        $('#stratSel').value = stratId; renderParams();
+        for (const [k, v] of Object.entries(p)) { const inp = $(`#paramBox [data-param="${k}"]`); if (inp) inp.value = v; }
+        validateParams(); nav('strat');
+        $('#runStatus').innerHTML = '<div class="okline">✓ &nbsp;Walk-forward winner loaded — hit Run backtest.</div>';
+      });
+      return;
+    }
     const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: S.bars, stratId, grids: g.grids, opts, splitPct: useOOS ? 0.7 : 0 },
       (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `${done} / ${total} combinations…`; });
     if (cancelled) return;
@@ -1381,6 +1480,16 @@ async function runSweep() {
         <b>Buy &amp; Hold same window${useOOS ? 's' : ''}:</b>
         <span class="${res.benchIS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchIS)}</span> in-sample${useOOS ? ` · <span class="${res.benchOOS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchOOS)}</span> out-of-sample` : ''}.
         <div class="hint">${nIS} of ${res.results.length} combos beat it in-sample${useOOS ? `; <b>${nBoth} beat it in both windows</b> — those are the only ones worth a second look` : ''}. ✓ marks a return that beats B&amp;H (note: strategy returns pay fees, B&amp;H here doesn’t — so ✓ is the harder test).</div>
+        ${(() => {                                                               /* [DR-46] */
+          const ts = res.trialStats || {};
+          const expMax = BT.expectedMaxSharpe(ts.n, ts.varSharpe);
+          if (!expMax) return '';
+          const top = ts.maxSharpe;
+          const v = top > 1.25 * expMax ? '<b class="pos">clears the luck bar</b>'
+                  : top >= 0.75 * expMax ? '<b style="color:var(--warn)">indistinguishable from selection luck</b>'
+                  : '<b class="neg">below what luck alone would produce</b>';
+          return `<div class="hint" style="margin-top:6px">Selection-bias check: testing ${ts.n.toLocaleString()} combos, pure luck would be expected to yield a best in-sample Sharpe of ~${expMax.toFixed(2)}. Your best is ${top.toFixed(2)} — ${v}.</div>`;
+        })()}
         <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button" style="margin-top:8px">${filterOn ? `Showing only B&amp;H beaters (${useOOS ? nBoth : nIS})` : 'Show only combos that beat Buy & Hold'}</button>
       </div>
       ${shown.length === 0 ? '<div class="empty"><p>Nothing beat Buy &amp; Hold' + (useOOS ? ' in both windows' : '') + ' — on this data, holding wins. That is a finding, not a failure.</p></div>' : `
@@ -1471,11 +1580,13 @@ async function boot() {
     $('#symHint').textContent = custom ? 'Format: BASE/QUOTE — btcusdt, BTC-USDT and btc/usdt all work.' : '';
     if (custom) $('#symCustom').focus();
   };
-  $('#swOOS').onclick = () => {
-    const b = $('#swOOS');
-    b.classList.toggle('on');
-    b.textContent = b.classList.contains('on') ? 'ON — recommended' : 'OFF — in-sample only';
+  const VAL_HINTS = {
+    split: 'Parameters are fitted on the first 70% and judged on the untouched last 30%. Indicators warm up on pre-window data, so slow MAs trade from day one of the test.',
+    wfa: 'The grid is re-optimized 5 times on expanding history; each winner is tested only on the next unseen window. Stitched OOS return + parameter stability = the strongest overfitting test this side of a research paper.',
+    none: 'Every result is an in-sample fit. Fine for exploring, meaningless as evidence.',
   };
+  $('#swVal').onchange = () => { $('#swValHint').textContent = VAL_HINTS[$('#swVal').value]; };
+  $('#swVal').onchange();
   $('#selfTestBtn').onclick = selfTest;
   $('#proxySave').onclick = async () => {
     let v = $('#proxyIn').value.trim();
