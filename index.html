@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.0</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.1</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -174,6 +174,21 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <div class="hint" id="stratHint"></div>
     <div id="paramBox"></div>
     <div id="paramWarn"></div>
+  </div>
+  <h2>Analysis window</h2>
+  <div class="card">
+    <label class="f">Fit from — bounds backtests, sweeps &amp; walk-forward to this era</label>
+    <select id="fitFrom">
+      <option value="0" selected>All data</option>
+      <option value="2017">2017 onward</option>
+      <option value="2020">2020 onward (post-maturation)</option>
+      <option value="2023">2023 onward (ETF era)</option>
+      <option value="custom">Custom date…</option>
+    </select>
+    <input type="date" id="fitFromDate" style="display:none;margin-top:8px">
+    <div class="hint" id="fitFromHint">Crypto is non-stationary — early eras are a different, wilder asset. Fitting on the era that resembles the future beats fitting on all of history. Excluded early bars are kept for the era stress-test below.</div>
+    <button class="btn ghost" id="stressBtn" style="margin-top:8px" disabled>Era stress-test — run current strategy on the excluded early bars</button>
+    <div id="stressOut"></div>
   </div>
   <h2>Regime filters</h2>
   <div class="card">
@@ -318,7 +333,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.1</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -1217,6 +1232,7 @@ function makeWorker() {
   return new Worker(URL.createObjectURL(blob));
 }
 let msgId = 0;
+let updateFitFromRef = null;                             /* [DR-63] set in boot */
 function workerCall(worker, payload, onProgress) {
   return new Promise((resolve, reject) => {
     const id = ++msgId;
@@ -1448,6 +1464,7 @@ async function selectDataset(key) {
   await DB.put('settings', 'selectedKey', key);
   $('#dsBadge').textContent = (rec.meta.demo ? 'DEMO ' : '') + rec.meta.symbol + ' · ' + rec.meta.tf + ' · ' + rec.bars.length.toLocaleString();
   refreshDsBanners();
+  if (typeof updateFitFromRef === 'function') updateFitFromRef();               /* [DR-63] refresh excluded-bar count */
   return true;
 }
 function refreshDsBanners() {
@@ -1559,6 +1576,25 @@ function validateParams() {
   return ok;
 }
 
+/* ---------------- analysis window [DR-63] ---------------- */
+function fitFromMs() {
+  const v = $('#fitFrom').value;
+  if (v === '0') return 0;
+  if (v === 'custom') { const d = $('#fitFromDate').value; return d ? Date.parse(d) : 0; }
+  return Date.UTC(+v, 0, 1);
+}
+function fitSplitIndex() {                                // first bar index >= fit-from
+  const cut = fitFromMs();
+  if (!cut || !S.bars) return 0;
+  let i = 0; while (i < S.bars.length && S.bars[i][0] < cut) i++;
+  return i;
+}
+function fitBars() { const i = fitSplitIndex(); return i > 0 ? S.bars.slice(i) : S.bars; }
+function fitLabel() {
+  const b = fitBars();
+  return b.length ? fmtDate(b[0][0]) : '—';
+}
+
 function currentOpts() {                                 /* shared by run + sweep + WFA [DR-49, DR-53] */
   return {
     feePct: +$('#feeIn').value,                         /* [DR-01, DR-15] */
@@ -1585,20 +1621,56 @@ async function runBacktest() {
   if (!validateParams()) return;
   const btn = $('#runBtn'), st = $('#runStatus');
   btn.disabled = true;
-  st.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; Running on ${S.bars.length.toLocaleString()} bars…</div>`;
+  const bars = fitBars();                                /* [DR-63] */
+  if (bars.length < 60) { st.innerHTML = `<div class="errline">✕ &nbsp;Only ${bars.length} bars after the fit-from date — widen the analysis window.</div>`; btn.disabled = false; return; }
+  st.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; Running on ${bars.length.toLocaleString()} bars from ${fmtDate(bars[0][0])}…</div>`;
   const stratId = $('#stratSel').value;
   const params = readParams($('#paramBox'));
   const opts = currentOpts();
   try {
     if (!S.worker) S.worker = makeWorker();
-    const res = await workerCall(S.worker, { cmd: 'run', bars: S.bars, stratId, params, opts });
-    S.lastResult = { res, stratId, params, opts, meta: S.meta, barsRef: S.bars, ts: S.bars.map(b => b[0]), closes: S.bars.map(b => b[4]), opens: S.bars.map(b => b[1]), highs: S.bars.map(b => b[2]), lows: S.bars.map(b => b[3]) };
+    const res = await workerCall(S.worker, { cmd: 'run', bars, stratId, params, opts });
+    S.lastResult = { res, stratId, params, opts, meta: S.meta, barsRef: bars, ts: bars.map(b => b[0]), closes: bars.map(b => b[4]), opens: bars.map(b => b[1]), highs: bars.map(b => b[2]), lows: bars.map(b => b[3]) };
     st.innerHTML = '';
     nav('results');            // must be visible BEFORE charts size themselves
     renderResults();
   } catch (e) {
     st.innerHTML = `<div class="errline">✕ &nbsp;Backtest failed: ${e.message}. Parameters and dataset are unchanged — adjust and re-run.</div>`;
   } finally { btn.disabled = !S.selectedKey; }
+}
+
+/* ---------------- era stress-test [DR-64] ---------------- */
+async function eraStressTest() {
+  const split = fitSplitIndex();
+  const early = S.bars.slice(0, split);
+  const out = $('#stressOut');
+  if (early.length < 260) { out.innerHTML = `<div class="errline">✕ &nbsp;Not enough excluded early bars.</div>`; return; }
+  if (!validateParams()) { out.innerHTML = `<div class="errline">✕ &nbsp;Fix the strategy parameters first.</div>`; return; }
+  out.innerHTML = `<div class="hint" style="margin-top:8px"><span class="spin"></span>&nbsp; Testing on ${early.length} excluded bars (${fmtDate(early[0][0])}→${fmtDate(early[split - 1][0])})…</div>`;
+  const stratId = $('#stratSel').value, params = readParams($('#paramBox'));
+  try {
+    if (!S.worker) S.worker = makeWorker();
+    const res = await workerCall(S.worker, { cmd: 'run', bars: early, stratId, params, opts: currentOpts() });
+    const m = res.metrics, rb = res.regime;
+    const strat = BT.strategy(stratId).name;
+    const pTxt = Object.entries(params).map(([k, v]) => k === 'type' ? v : v).join('/');
+    const edge = (k) => rb ? rb[k].strat - rb[k].bench : 0;
+    const chopOK = rb && edge('chop') > 0, bearOK = rb && edge('bear') > 0;
+    out.innerHTML = `
+      <div class="card" style="background:var(--surface2);margin-top:10px;padding:12px">
+        <b>${strat} ${pTxt}</b> on <b>${fmtDate(early[0][0])}→${fmtDate(early[split - 1][0])}</b> — never fitted here.
+        <div class="hint" style="margin-top:6px">Strategy ${fmtPct(m.totalReturn)} vs B&amp;H ${fmtPct(res.benchTotal)} · max DD ${fmtPctU(m.maxDrawdown)} · IR ${fmtNum(m.ir)} (t ${fmtNum(m.tExcess)})</div>
+        ${rb ? `<table style="margin-top:8px"><thead><tr><th>Regime</th><th>Strat</th><th>B&amp;H</th><th>Edge</th></tr></thead><tbody>
+          ${['bull', 'chop', 'bear'].map(k => `<tr><td>${{ bull: '🟢 Bull', chop: '🟡 Chop', bear: '🔴 Bear' }[k]}</td>
+            <td class="${rb[k].strat >= 0 ? 'pos' : 'neg'}">${fmtPct(rb[k].strat)}</td>
+            <td class="${rb[k].bench >= 0 ? 'pos' : 'neg'}">${fmtPct(rb[k].bench)}</td>
+            <td class="${edge(k) >= 0 ? 'pos' : 'neg'}"><b>${fmtPct(edge(k))}</b></td></tr>`).join('')}
+        </tbody></table>` : ''}
+        <div class="${(chopOK && bearOK) ? 'okline' : 'warnline'}" style="margin-top:8px">${(chopOK && bearOK)
+          ? '✓ The protective mechanism SURVIVED an era it never saw — chop and bear edges both held. Strong evidence the edge is structural, not fitted.'
+          : '⚠ Mixed: ' + (chopOK ? '' : 'chop edge did not hold; ') + (bearOK ? '' : 'bear edge did not hold. ') + 'Lagging a parabolic early bull is expected — judge on the regime edges, not raw return.'}</div>
+      </div>`;
+  } catch (e) { out.innerHTML = `<div class="errline">✕ &nbsp;Stress-test failed: ${e.message}</div>`; }
 }
 
 /* ---------------- charts (canvas, DPR-aware) [DR-33, DR-39] ---------------- */
@@ -1769,7 +1841,7 @@ function renderResults() {
     ${demoNote}
     <div class="card" style="padding:12px 14px">
       <b>${stratName}</b> <span class="note">on ${R.meta.demo ? 'DEMO ' : ''}${R.meta.symbol} ${R.meta.tf}</span>
-      <div class="hint">${pTxt} · fee ${R.opts.feePct}%/side · slip ${R.opts.slipPct}% · analysis ${fmtDate(R.ts[R.res.warm])} → ${fmtDate(R.ts[R.ts.length - 1])} (${R.res.warm}-bar warm-up excluded; B&amp;H measured over the same window)</div>
+      <div class="hint">${pTxt} · fee ${R.opts.feePct}%/side · slip ${R.opts.slipPct}% · analysis ${fmtDate(R.ts[R.res.warm])} → ${fmtDate(R.ts[R.ts.length - 1])} (${R.res.warm}-bar warm-up excluded; B&amp;H measured over the same window)${R.meta && R.barsRef.length < (S.bars ? S.bars.length : R.barsRef.length) ? ' · fit-from era restricted [DR-63]' : ''}</div>
       <div class="hint">${(() => {                                              /* [DR-49, DR-53] settings that produced these numbers */
         const o = R.opts, bits = [];
         if (o.stopLossPct) bits.push('SL ' + o.stopLossPct + '%');
@@ -2006,6 +2078,8 @@ async function runSweep() {
   const valMode = $('#swVal').value;                                             /* [DR-42, DR-45] */
   const useOOS = valMode === 'split';
   const opts = { ...currentOpts(), sortKey };            /* exits + sizing flow into sweeps too [DR-49] */
+  const swBars = fitBars();                              /* [DR-63] */
+  if (swBars.length < 300) { warn.innerHTML = `<div class="errline">✕ &nbsp;Only ${swBars.length} bars after the fit-from date — widen the analysis window.</div>`; return; }
   $('#swRunBtn').style.display = 'none'; $('#swCancelBtn').style.display = ''; $('#swProg').style.display = '';
   $('#swStatus').textContent = `0 / ${g.combos.toLocaleString()} combinations…` +
     (g.combos > 2000 ? ' Large sweep — this can take a little while on a phone; Cancel any time.' : '');  /* [DR-43] */
@@ -2019,7 +2093,7 @@ async function runSweep() {
   try {
     if (valMode === 'wfa') {                                                     /* [DR-45] */
       const nWin = +$('#swWin').value || 5;                                      /* [DR-60] */
-      const res = await workerCall(S.sweepWorker, { cmd: 'wfa', bars: S.bars, stratId, grids: g.grids, opts, nWin },
+      const res = await workerCall(S.sweepWorker, { cmd: 'wfa', bars: swBars, stratId, grids: g.grids, opts, nWin },
         (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `Walk-forward: window ${Math.min(nWin, Math.floor(done / (total / nWin)) + 1)} of ${nWin}…`; });
       if (cancelled) return;
       endSweep();
@@ -2072,7 +2146,7 @@ async function runSweep() {
       if (cons) cons.onclick = () => loadParamsIntoStrategy(stratId, JSON.parse(cons.dataset.p), 'Consensus pick (plateau center)');
       return;
     }
-    const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: S.bars, stratId, grids: g.grids, opts, splitPct: useOOS ? 0.7 : 0 },
+    const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: swBars, stratId, grids: g.grids, opts, splitPct: useOOS ? 0.7 : 0 },
       (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `${done} / ${total} combinations…`; });
     if (cancelled) return;
     endSweep();
@@ -2217,6 +2291,24 @@ async function boot() {
   };
   $('#swVal').onchange();
   $('#sizeMode').onchange = () => { $('#atrBox').style.display = $('#sizeMode').value === 'atr' ? '' : 'none'; };
+  updateFitFromRef = () => {                                                    /* [DR-63/64] */
+    const custom = $('#fitFrom').value === 'custom';
+    $('#fitFromDate').style.display = custom ? '' : 'none';
+    const excluded = fitSplitIndex();
+    const total = S.bars ? S.bars.length : 0;
+    $('#fitFromHint').innerHTML = (fitFromMs() === 0
+      ? 'Fitting on ALL history. Crypto is non-stationary — early eras are a wilder, different asset; consider restricting to 2017+ or 2020+.'
+      : `Fitting from <b>${fitLabel()}</b> — ${total - excluded} bars in, ${excluded} early bars excluded (kept for the stress-test).`);
+    $('#stressBtn').disabled = excluded < 260;
+    $('#stressBtn').textContent = excluded < 260
+      ? 'Era stress-test — needs ≥260 excluded early bars (raise the fit-from date)'
+      : `Era stress-test — run current strategy on the ${excluded} excluded early bars`;
+  };
+  $('#fitFrom').onchange = updateFitFromRef;
+  $('#fitFromDate').onchange = updateFitFromRef;
+  $('#stressBtn').onclick = eraStressTest;
+  updateFitFromRef();
+
   for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP']]) {   /* [DR-56] */
     $('#' + id).onclick = () => {
       const b = $('#' + id);
