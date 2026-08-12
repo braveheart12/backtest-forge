@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.6</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.7</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -384,6 +384,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     </div>
     <label class="f">Extra symbols (optional, comma-separated)</label>
     <input type="text" id="scExtra" placeholder="e.g. ARB/USDT, OP/USDT" autocapitalize="characters">
+    <label class="f">Exclude symbols (optional — for anything the built-in filters miss)</label>
+    <input type="text" id="scExcl" placeholder="e.g. AAPLX, PAXG" autocapitalize="characters">
+    <div class="hint">Tokenized stocks (xStocks 'X' / Ondo 'ON' suffixes + known bStocks), gold (PAXG/XAUT), and stablecoins are excluded automatically — Binance's API doesn't tag them, so the lists are name-based and this box covers new listings. Adding a symbol under “Extra” overrides all exclusions. [DR-85]</div>
     <label class="f">Profiles to scan</label>
     <div class="row chips" id="scProfiles"></div>
     <div class="hint">BTC-style = MA-cross 20/90 + Faber SMA-200 entry gate (the DR-70-validated family). ETH-style = de-lagged HMA 25/125, no gate (DR-59/72). Current = whatever the Strategy tab is set to right now.</div>
@@ -450,7 +453,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.6</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.7</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -459,7 +462,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
-  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.6M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.7M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
@@ -3700,8 +3703,25 @@ function applyFiltersToUI(filters) {                                            
   if (filters && filters.vwap) { $('#fVwapLen').value = filters.vwap.len; }
   if (filters && filters.level) { $('#fLevelType').value = filters.level.type || 'SMA'; $('#fLevelLen').value = filters.level.len; }
 }
+/* asset-class exclusions [DR-85]: Binance's spot API does NOT tag tokenized stocks, gold or
+   stables — identification is by naming convention (xStocks 'X' suffix, Ondo 'ON' suffix,
+   bStocks) + curated lists. A user box covers whatever Binance lists next. */
+const RWA_STOCK_BASES = new Set(['AAPLX', 'TSLAX', 'NVDAX', 'CRCLX', 'COINX', 'GOOGLX', 'HOODX', 'IBMX', 'NOKX', 'AMZNX', 'AMATX', 'DELLX', 'FLNCX', 'GSX', 'PYPLX', 'BEX', 'MSTRX', 'METAX', 'MSFTX', 'QQQX', 'SPYX', 'SMHX', 'AVGOX', 'LLYX', 'JPMX', 'UNHX']);
+const STABLE_BASES = /^(USDC|FDUSD|TUSD|BUSD|DAI|USDP|PYUSD|USDE|USDS|USD0|USD1|USDX|XUSD|AEUR|EURI|EUR|EURT|GYEN|BFUSD|RLUSD|USDG|GUSD|LUSD|FRAX|USTC)$/;
+const COMMODITY_BASES = /^(PAXG|XAUT|KAU|KAG|XAG)$/;
+function excludedBase(base, userExcl) {
+  if (userExcl && userExcl.has(base)) return 'user-excluded';
+  if (STABLE_BASES.test(base)) return 'stablecoin';
+  if (COMMODITY_BASES.test(base)) return 'gold/commodity';
+  if (RWA_STOCK_BASES.has(base)) return 'tokenized stock';
+  if (/ON$/.test(base) && base.length >= 5) return 'tokenized stock (Ondo)';
+  return null;
+}
+function userExclSet() {
+  return new Set($('#scExcl').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
+}
 /* volume-ranked universe discovery [DR-78]: one bulk ticker call per exchange */
-async function discoverUniverse(exId, minVolUSD, maxN) {
+async function discoverUniverse(exId, minVolUSD, maxN, userExcl) {
   const proxy = await getProxy();
   const get = async (url) => {
     let r;
@@ -3718,14 +3738,16 @@ async function discoverUniverse(exId, minVolUSD, maxN) {
       const bt = await get('https://api.binance.com/api/v3/ticker/bookTicker');
       spreads = new Map(bt.filter(x => +x.askPrice > 0 && +x.bidPrice > 0).map(x => [x.symbol, (+x.askPrice - +x.bidPrice) / ((+x.askPrice + +x.bidPrice) / 2)]));
     } catch (e) { spreads = null; }
-    return all.filter(t => t.symbol && t.symbol.endsWith('USDT') && !lev.test(t.symbol) && !stable.test(t.symbol) && +t.quoteVolume >= minVolUSD)
+    return all.filter(t => t.symbol && t.symbol.endsWith('USDT') && !lev.test(t.symbol) && !stable.test(t.symbol)
+        && !excludedBase(t.symbol.slice(0, -4), userExcl)                        /* [DR-85] stocks/gold/stables/user */
+        && +t.quoteVolume >= minVolUSD)
       .sort((a, b) => +b.quoteVolume - +a.quoteVolume)
       .slice(0, maxN)
       .map(t => ({ sym: t.symbol.slice(0, -4) + '/USDT', vol: +t.quoteVolume, spread: spreads ? spreads.get(t.symbol) : null }));
   }
   if (exId === 'bitstamp') {
     const all = await get('https://www.bitstamp.net/api/v2/ticker/');
-    return all.filter(t => t.pair && t.pair.endsWith('/USD'))
+    return all.filter(t => t.pair && t.pair.endsWith('/USD') && !excludedBase(t.pair.split('/')[0], userExcl))   /* [DR-85] */
       .map(t => ({ sym: t.pair, vol: (+t.volume || 0) * (+t.last || 0),
                    spread: (+t.ask > 0 && +t.bid > 0) ? (+t.ask - +t.bid) / ((+t.ask + +t.bid) / 2) : null }))   /* [DR-82] */
       .filter(t => Number.isFinite(t.vol) && t.vol >= minVolUSD)
@@ -3748,7 +3770,7 @@ async function runScan() {
     const minVol = (+$('#scMinVol').value || 25) * 1e6, maxN = Math.min(60, +$('#scMaxN').value || 30);
     status.innerHTML = '<span class="spin"></span>&nbsp; Discovering pairs above $' + (minVol / 1e6) + 'M 24h volume…';
     try {
-      const disc = await discoverUniverse(exId, minVol, maxN);
+      const disc = await discoverUniverse(exId, minVol, maxN, userExclSet());    /* [DR-85] */
       if (disc === null) { uniNote = 'curated majors (Coinbase has no bulk-volume endpoint)'; }
       else if (!disc.length) { status.innerHTML = '<div class="errline">✕ &nbsp;No pairs above the floor — lower the volume threshold.</div>'; return; }
       else { base = disc.map(d => d.sym); scanInfo = new Map(disc.map(d => [d.sym, d])); uniNote = disc.length + ' pairs ≥ $' + (minVol / 1e6) + 'M 24h volume (by rank)'; }
@@ -3757,7 +3779,10 @@ async function runScan() {
       await sleep(900);
     }
   }
-  const syms = [...new Set([...base, ...extra])];
+  const uex = userExclSet();
+  DB.put('settings', 'scExcl', $('#scExcl').value).catch(() => {});             /* [DR-85] persist */
+  const curated = base.filter(s => !excludedBase(s.split('/')[0], uex));         /* extras bypass exclusions deliberately */
+  const syms = [...new Set([...curated, ...extra])];
   scCancelled = false;
   $('#scRunBtn').style.display = 'none'; $('#scCancelBtn').style.display = '';
   $('#scCancelBtn').onclick = () => { scCancelled = true; };
@@ -4044,6 +4069,7 @@ async function boot() {
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});  /* [DR-36 eviction mitigation] */
   await seedDemos(false);
   $('#proxyIn').value = await getProxy();
+  $('#scExcl').value = (await DB.get('settings', 'scExcl')) || '';               /* [DR-85] */
 
   const savedKey = await DB.get('settings', 'selectedKey');
   if (savedKey) await selectDataset(savedKey);
