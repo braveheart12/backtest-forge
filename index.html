@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.4</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.5</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -195,7 +195,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <p class="note" style="margin-bottom:4px">Optional gates ANDed onto the position signal — when a gate is off-side the strategy stays (or goes) flat. Applied identically in backtests, sweeps and walk-forward.</p>
     <div class="row" style="margin-top:8px">
       <button class="mini toggle" id="fSlopeOn" type="button" style="min-width:104px">Slope: off</button>
-      <div style="flex:1"><label class="f" style="margin-top:0">MA type</label><select id="fSlopeType"><option>SMA</option><option>EMA</option><option>WMA</option><option selected>HMA</option><option>RMA</option><option>DEMA</option><option>TEMA</option><option>ZLEMA</option><option>VWMA</option><option>KAMA</option></select></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">MA type</label><select id="fSlopeType"><option>SMA</option><option>EMA</option><option>WMA</option><option selected>HMA</option><option>RMA</option><option>DEMA</option><option>TEMA</option><option>ZLEMA</option><option>VWMA</option><option>KAMA</option><option>GMA</option><option>ALMA</option></select></div>
       <div style="flex:1"><label class="f" style="margin-top:0">Length</label><input type="number" id="fSlopeLen" value="50" min="10" max="400" inputmode="numeric"></div>
       <div style="flex:1"><label class="f" style="margin-top:0">Rising over</label><input type="number" id="fSlopeK" value="20" min="2" max="100" inputmode="numeric"></div>
     </div>
@@ -208,7 +208,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <div class="hint">Only trade when trend strength is above the threshold — Wilder's own whipsaw filter.</div>
     <div class="row" style="margin-top:10px">
       <button class="mini toggle" id="fLevelOn" type="button" style="min-width:104px">Level: off</button>
-      <div style="flex:1"><label class="f" style="margin-top:0">MA type</label><select id="fLevelType"><option selected>SMA</option><option>EMA</option><option>WMA</option><option>HMA</option><option>RMA</option><option>DEMA</option><option>TEMA</option><option>ZLEMA</option><option>VWMA</option><option>KAMA</option></select></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">MA type</label><select id="fLevelType"><option selected>SMA</option><option>EMA</option><option>WMA</option><option>HMA</option><option>RMA</option><option>DEMA</option><option>TEMA</option><option>ZLEMA</option><option>VWMA</option><option>KAMA</option><option>GMA</option><option>ALMA</option></select></div>
       <div style="flex:1"><label class="f" style="margin-top:0">Length</label><input type="number" id="fLevelLen" value="200" min="20" max="400" inputmode="numeric"></div>
     </div>
     <div class="hint"><b>Faber gate — the only enhancement that passed the pre-registered battery (6/8 cells)</b>: blocks NEW entries while close &lt; MA, never forces exits. BTC: ON, high confidence (mechanism + consistent WFA gains on 15y data). ETH: <b>unresolved</b> — the mechanism holds (+45% vs +6% entry outcomes) but backtests split on window composition; test both ways. [DR-67, DR-68]</div>
@@ -341,7 +341,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.4</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.5</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -463,8 +463,30 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     return out;
   }
-  const MA_TYPES = ['SMA', 'EMA', 'WMA', 'HMA', 'RMA', 'DEMA', 'TEMA', 'ZLEMA', 'VWMA', 'KAMA'];  /* [DR-40] */
-  const MA_WARM_MULT = { SMA: 1, WMA: 1, VWMA: 1, EMA: 1, RMA: 1, ZLEMA: 1.5, HMA: 1.2, KAMA: 1.2, DEMA: 2, TEMA: 3 };  /* [DR-57, DR-65] */
+  function gma(src, p) {                                                         // geometric mean = exp(SMA(log)) — conservative SMA variant, sits lower in high vol [DR-73]
+    const n = src.length, lg = new Float64Array(n);
+    for (let i = 0; i < n; i++) lg[i] = src[i] > 0 ? Math.log(src[i]) : NaN;
+    const s = sma(lg, p), out = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) if (isFinite(s[i])) out[i] = Math.exp(s[i]);
+    return out;
+  }
+  function alma(src, p, offset, sigma) {                                         // Arnaud Legoux MA: Gaussian window shifted toward recent bars (offset .85, sigma 6) [DR-73]
+    offset = offset === undefined ? 0.85 : offset; sigma = sigma === undefined ? 6 : sigma;
+    const n = src.length, out = new Float64Array(n).fill(NaN);
+    const m = offset * (p - 1), s = p / sigma;
+    const w = new Float64Array(p);
+    let wsum = 0;
+    for (let j = 0; j < p; j++) { w[j] = Math.exp(-((j - m) * (j - m)) / (2 * s * s)); wsum += w[j]; }
+    let f = 0; while (f < n && !isFinite(src[f])) f++;
+    for (let i = f + p - 1; i < n; i++) {
+      let acc = 0;
+      for (let j = 0; j < p; j++) acc += w[j] * src[i - (p - 1) + j];
+      out[i] = acc / wsum;
+    }
+    return out;
+  }
+  const MA_TYPES = ['SMA', 'EMA', 'WMA', 'HMA', 'RMA', 'DEMA', 'TEMA', 'ZLEMA', 'VWMA', 'KAMA', 'GMA', 'ALMA'];  /* [DR-40, DR-73] */
+  const MA_WARM_MULT = { SMA: 1, WMA: 1, VWMA: 1, EMA: 1, RMA: 1, ZLEMA: 1.5, HMA: 1.2, KAMA: 1.2, DEMA: 2, TEMA: 3, GMA: 1, ALMA: 1 };  /* [DR-57, DR-65, DR-73] */
   function maOf(type, C, p) {
     switch (type) {
       case 'SMA': return sma(C.c, p);   case 'EMA': return ema(C.c, p);
@@ -472,6 +494,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       case 'RMA': return rma(C.c, p);   case 'DEMA': return dema(C.c, p);
       case 'TEMA': return tema(C.c, p); case 'ZLEMA': return zlema(C.c, p);
       case 'VWMA': return vwma(C.c, C.v, p); case 'KAMA': return kama(C.c, p);
+      case 'GMA': return gma(C.c, p);   case 'ALMA': return alma(C.c, p);        /* [DR-73] */
       default: return sma(C.c, p);
     }
   }
@@ -1654,7 +1677,7 @@ async function renderDsList() {
 /* ---------------- strategy screen [DR-30, DR-31] ---------------- */
 const STRAT_HINTS = {
   buyhold: 'Buys at the start and holds. The baseline everything else must beat.',
-  macross: 'In the market while the fast average is above the slow one. Pick from 10 MA types — SMA is the classic; HMA/TEMA react faster, RMA/KAMA are smoother.',
+  macross: 'In the market while the fast average is above the slow one. Pick from 12 MA types — SMA is the classic; HMA/TEMA/ALMA react faster, RMA/KAMA are smoother, GMA is a conservative SMA variant.',
   bbmr: 'Buys when price closes below the lower Bollinger band, exits above the middle band. Mean-reversion — buys panic, sells normality.',
   supert: 'In the market while SuperTrend (ATR bands with a ratchet) is bullish. Trend-following with a built-in volatility stop.',
   rsimr: 'Buys after sharp dips (RSI low), exits after recovery. Mean-reversion.',
