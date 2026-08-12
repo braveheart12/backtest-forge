@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Backtest Forge</title>
+<!-- A2HS / standalone [DR-36] -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BT Forge">
+<meta name="theme-color" content="#0d0d0d">
+<link rel="manifest" href='data:application/manifest+json,{"name":"Backtest Forge","short_name":"BT Forge","display":"standalone","background_color":"%230d0d0d","theme_color":"%230d0d0d","start_url":"."}'>
+<style>
+/* ---- chrome & ink: dataviz reference palette, dark mode [DR-33] ---- */
+:root{
+  color-scheme: dark;
+  --page:#0d0d0d; --surface:#1a1a19; --surface2:#232322;
+  --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+  --s1:#3987e5; --s2:#d95926;            /* categorical slots 1,2 (dark) */
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --up:#0ca30c; --down:#d03b3b;
+  --div-pos:#3987e5; --div-neg:#e66767; --div-mid:#383835;
+  --sab:env(safe-area-inset-bottom,0px); --sat:env(safe-area-inset-top,0px);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--page);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.45;overscroll-behavior:none}
+#app{display:flex;flex-direction:column;min-height:100dvh}
+header{position:sticky;top:0;z-index:20;background:rgba(13,13,13,.92);backdrop-filter:blur(8px);padding:calc(10px + var(--sat)) 16px 10px;border-bottom:1px solid var(--grid);display:flex;align-items:center;gap:10px}
+header h1{font-size:17px;font-weight:700;letter-spacing:.2px}
+#dsBadge{margin-left:auto;font-size:12px;color:var(--ink2);background:var(--surface2);border:1px solid var(--ring);padding:4px 10px;border-radius:999px;max-width:52vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+main{flex:1;padding:14px 14px calc(76px + var(--sab));max-width:640px;width:100%;margin:0 auto}
+.screen{display:none}.screen.active{display:block}
+h2{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:18px 2px 8px}
+.card{background:var(--surface);border:1px solid var(--ring);border-radius:14px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+label.f{display:block;font-size:12px;color:var(--ink2);margin:10px 0 4px}
+input[type=text],input[type=number],select{width:100%;background:var(--surface2);color:var(--ink);border:1px solid var(--axis);border-radius:10px;padding:12px;font-size:16px;min-height:44px}
+input:focus,select:focus{outline:2px solid var(--s1);outline-offset:0}
+.seg{display:flex;background:var(--surface2);border-radius:10px;padding:3px;gap:3px}
+.seg button{flex:1;min-height:44px;border:0;background:transparent;color:var(--ink2);border-radius:8px;font-size:14px;font-weight:600}
+.seg button.on{background:var(--s1);color:#fff}
+button.btn{display:block;width:100%;min-height:48px;border:0;border-radius:12px;background:var(--s1);color:#fff;font-size:16px;font-weight:700;margin-top:12px}
+button.btn:disabled{opacity:.45}
+button.btn.ghost{background:var(--surface2);color:var(--ink);border:1px solid var(--axis)}
+button.btn.danger{background:var(--crit)}
+button.mini{min-height:40px;border:1px solid var(--axis);background:var(--surface2);color:var(--ink);border-radius:9px;padding:0 12px;font-size:13px;font-weight:600}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+.note{font-size:13px;color:var(--ink2)}
+.warnline{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-top:8px;padding:9px 10px;border-radius:9px;background:rgba(250,178,25,.08);color:var(--warn)}
+.errline{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-top:8px;padding:9px 10px;border-radius:9px;background:rgba(208,59,59,.10);color:#f2a0a0}
+.okline{display:flex;gap:8px;align-items:center;font-size:13px;margin-top:8px;padding:9px 10px;border-radius:9px;background:rgba(12,163,12,.10);color:var(--good)}
+/* dataset cards */
+.ds{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--ring);border-radius:12px;margin-bottom:8px;background:var(--surface)}
+.ds.sel{border-color:var(--s1);box-shadow:0 0 0 1px var(--s1)}
+.ds .t{flex:1;min-width:0}
+.ds .t b{font-size:15px}
+.ds .t .sub{font-size:12px;color:var(--muted)}
+.badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;border:1px solid var(--ring);color:var(--ink2);white-space:nowrap}
+.badge.demo{color:var(--warn);border-color:rgba(250,178,25,.4)}
+.badge.live{color:var(--good);border-color:rgba(12,163,12,.4)}
+/* stat tiles */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:12px}
+.tile .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.tile .v{font-size:22px;font-weight:700;margin-top:2px}
+.tile .c{font-size:11px;color:var(--muted);margin-top:2px}
+.tile .v.pos{color:var(--good)}.tile .v.neg{color:var(--crit)}
+.mgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px}
+.mgrid .tile .v{font-size:16px}
+/* charts */
+.chartwrap{position:relative;margin-top:6px}
+canvas.chart{width:100%;height:190px;display:block;border-radius:10px;background:var(--surface)}
+canvas.chart.tall{height:230px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--ink2);margin:8px 2px 2px}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.tip{position:absolute;pointer-events:none;background:var(--surface2);border:1px solid var(--axis);border-radius:8px;padding:6px 9px;font-size:12px;color:var(--ink);display:none;z-index:5;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.5)}
+/* tables */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{color:var(--muted);text-align:right;font-weight:600;padding:6px 6px;border-bottom:1px solid var(--grid);white-space:nowrap}
+td{padding:6px 6px;text-align:right;border-bottom:1px solid var(--grid);font-variant-numeric:tabular-nums;color:var(--ink2)}
+th:first-child,td:first-child{text-align:left}
+tr.tap{cursor:pointer}
+tr.tap:active{background:var(--surface2)}
+.pos{color:var(--good)}.neg{color:var(--crit)}
+.scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* monthly grid */
+.mo{display:grid;grid-template-columns:auto repeat(12,1fr);gap:2px;font-size:9px;margin-top:8px}
+.mo div{padding:5px 1px;text-align:center;border-radius:3px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.mo .hd{color:var(--muted);background:transparent}
+.mo .yr{color:var(--muted);background:transparent;font-weight:600;padding-right:4px}
+/* bottom nav */
+nav{position:fixed;bottom:0;left:0;right:0;z-index:30;display:flex;background:rgba(13,13,13,.95);backdrop-filter:blur(8px);border-top:1px solid var(--grid);padding:6px 4px calc(6px + var(--sab))}
+nav button{flex:1;min-height:48px;border:0;background:transparent;color:var(--muted);font-size:11px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:3px;border-radius:10px}
+nav button.on{color:var(--s1)}
+nav button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* empty state */
+.empty{text-align:center;padding:36px 18px;color:var(--muted)}
+.empty .big{font-size:34px;margin-bottom:8px}
+.progress{height:6px;background:var(--surface2);border-radius:99px;overflow:hidden;margin-top:10px}
+.progress i{display:block;height:100%;background:var(--s1);width:0%;transition:width .2s}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--axis);border-top-color:var(--s1);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+dialog{border:1px solid var(--ring);border-radius:16px;background:var(--surface);color:var(--ink);padding:18px;max-width:340px;width:calc(100vw - 48px)}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+</style>
+</head>
+<body>
+<div id="app">
+<header><h1>Backtest Forge</h1><span id="dsBadge">no dataset</span></header>
+<main>
+
+<!-- ================= DATA ================= -->
+<section class="screen active" id="scr-data">
+  <div class="card" id="firstRun" style="display:none">
+    <b>Welcome.</b> <span class="note">Two demo datasets are ready below so you can try a backtest right now — no connection needed. To install on your iPhone: open this page in Safari → Share → <b>Add to Home Screen</b>.</span>
+  </div>
+  <h2>Fetch from Binance</h2>
+  <div class="card">
+    <label class="f">Symbol</label>
+    <div class="row">
+      <select id="symSel" style="flex:1">
+        <option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option><option>BNB/USDT</option>
+        <option value="__custom">Custom…</option>
+      </select>
+      <input type="text" id="symCustom" placeholder="e.g. DOGE/USDT" style="display:none;flex:1" autocapitalize="characters" autocomplete="off">
+    </div>
+    <div class="hint" id="symHint"></div>
+    <label class="f">Timeframe</label>
+    <div class="seg" id="tfSeg">
+      <button data-tf="15m">15m</button><button data-tf="1h">1h</button><button data-tf="4h">4h</button><button data-tf="1d" class="on">1d</button>
+    </div>
+    <label class="f">History depth</label>
+    <select id="depthSel">
+      <option value="1000">1,000 candles</option>
+      <option value="2000" selected>2,000 candles</option>
+      <option value="5000">5,000 candles</option>
+      <option value="10000">10,000 candles</option>
+    </select>
+    <button class="btn" id="fetchBtn">Fetch candles</button>
+    <div id="fetchStatus"></div>
+  </div>
+  <h2>Datasets on this device</h2>
+  <div id="dsList"></div>
+  <p class="hint">Demo datasets are <b>synthetic</b> — they prove the engine works, not that a strategy works. Fetch real Binance data for real analysis.</p>
+</section>
+
+<!-- ================= STRATEGY ================= -->
+<section class="screen" id="scr-strat">
+  <div id="noDsBanner" class="card" style="display:none">
+    <span class="note">No dataset selected yet.</span>
+    <button class="btn ghost" data-nav="data">Choose a dataset</button>
+  </div>
+  <h2>Strategy</h2>
+  <div class="card">
+    <select id="stratSel"></select>
+    <div class="hint" id="stratHint"></div>
+    <div id="paramBox"></div>
+    <div id="paramWarn"></div>
+  </div>
+  <h2>Costs &amp; capital</h2>
+  <div class="card">
+    <label class="f">Fee — % per side <span style="color:var(--muted)">(charged on entry and on exit)</span></label>
+    <input type="number" id="feeIn" value="0.10" step="0.01" min="0" max="5" inputmode="decimal">
+    <div id="feeWarn"></div>
+    <label class="f">Slippage — % per side</label>
+    <input type="number" id="slipIn" value="0.00" step="0.01" min="0" max="5" inputmode="decimal">
+    <label class="f">Starting capital (USDT)</label>
+    <input type="number" id="capIn" value="10000" step="100" min="1" inputmode="decimal">
+    <button class="btn" id="runBtn">Run backtest</button>
+    <div id="runStatus"></div>
+  </div>
+</section>
+
+<!-- ================= RESULTS ================= -->
+<section class="screen" id="scr-results">
+  <div id="resEmpty" class="empty">
+    <div class="big">📈</div>
+    <p>No backtest yet.</p>
+    <button class="btn ghost" data-nav="strat" style="max-width:260px;margin:14px auto 0">Set up a backtest</button>
+  </div>
+  <div id="resBody" style="display:none"></div>
+</section>
+
+<!-- ================= SWEEP ================= -->
+<section class="screen" id="scr-sweep">
+  <div id="noDsBanner2" class="card" style="display:none">
+    <span class="note">No dataset selected yet.</span>
+    <button class="btn ghost" data-nav="data">Choose a dataset</button>
+  </div>
+  <h2>Parameter sweep</h2>
+  <div class="card">
+    <p class="note" style="margin-bottom:8px">Tests every combination in the ranges below and ranks them by Sharpe. Tap a result row to load those parameters.</p>
+    <select id="swStratSel"></select>
+    <div id="swBox"></div>
+    <div id="swWarn"></div>
+    <button class="btn" id="swRunBtn">Run sweep</button>
+    <button class="btn danger" id="swCancelBtn" style="display:none">Cancel sweep</button>
+    <div class="progress" id="swProg" style="display:none"><i></i></div>
+    <div class="hint" id="swStatus"></div>
+  </div>
+  <div id="swResults"></div>
+</section>
+
+<!-- ================= SETTINGS ================= -->
+<section class="screen" id="scr-set">
+  <h2>Connectivity</h2>
+  <div class="card">
+    <button class="btn ghost" id="selfTestBtn" style="margin-top:0">Run connectivity self-test</button>
+    <div id="selfTestOut"></div>
+    <p class="hint">Tests whether Binance market data is reachable from <i>this device's</i> browser — the definitive check for live data. Demo data always works offline.</p>
+  </div>
+  <h2>CORS proxy (optional)</h2>
+  <div class="card">
+    <label class="f">Proxy URL prefix — used only if direct fetch is blocked</label>
+    <input type="text" id="proxyIn" placeholder="https://your-proxy.example.com/" autocapitalize="off" autocomplete="off">
+    <button class="btn ghost" id="proxySave">Save proxy</button>
+    <p class="hint">Requests become <code>proxy + https://api.binance.com/…</code>. Leave empty to fetch directly.</p>
+  </div>
+  <h2>Install on iPhone</h2>
+  <div class="card note">
+    1. Host this HTML file anywhere (GitHub Pages, Netlify drop — any HTTPS host).<br>
+    2. Open that link in <b>Safari</b> on your iPhone.<br>
+    3. Share button → <b>Add to Home Screen</b>.<br>
+    It launches full-screen like a native app — no App Store involved. If <code>sw.js</code> is hosted beside this file, the app also relaunches offline. <span id="swState" class="hint"></span>
+  </div>
+  <h2>Data</h2>
+  <div class="card">
+    <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
+    <button class="btn danger" id="wipeBtn">Delete all datasets</button>
+  </div>
+  <p class="hint" style="text-align:center">Backtest Forge v1.0 · long-only · data via ccxt/Binance · not investment advice</p>
+</section>
+</main>
+
+<nav>
+  <button data-nav="data" class="on"><svg viewBox="0 0 24 24"><path d="M12 3v13m0 0 4-4m-4 4-4-4M4 21h16"/></svg>Data</button>
+  <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
+  <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
+  <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
+  <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
+</nav>
+</div>
+
+<dialog id="dlg"><div id="dlgBody"></div><button class="btn ghost" id="dlgClose">Close</button></dialog>
+
+<!-- ======== ENGINE (verbatim, tested — see tests.js; embedded for main thread AND worker) ======== -->
+<script id="engine-src">
+/* Backtest Forge — pure engine + metrics + strategies. UI-free. [DR-30..DR-35]
+   Runs in node (tests) and in a blob Worker (app) unchanged. */
+(function (root) {
+  'use strict';
+  const BT = {};
+
+  /* ---------- helpers ---------- */
+  function colsFromBars(bars) { // bars: [[ts,o,h,l,c,v],...] -> typed columns
+    const n = bars.length;
+    const ts = new Float64Array(n), o = new Float64Array(n), h = new Float64Array(n),
+          l = new Float64Array(n), c = new Float64Array(n), v = new Float64Array(n);
+    for (let i = 0; i < n; i++) { const b = bars[i]; ts[i]=b[0]; o[i]=b[1]; h[i]=b[2]; l[i]=b[3]; c[i]=b[4]; v[i]=b[5]; }
+    return { n, ts, o, h, l, c, v };
+  }
+  BT.colsFromBars = colsFromBars;
+
+  BT.barsPerYear = function (tfSeconds) { return 31536000 / tfSeconds; }; // [DR-05]
+  BT.TF_SECONDS = { '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };   // [DR-14]
+
+  function sma(src, p) {
+    const n = src.length, out = new Float64Array(n).fill(NaN);
+    let s = 0;
+    for (let i = 0; i < n; i++) { s += src[i]; if (i >= p) s -= src[i - p]; if (i >= p - 1) out[i] = s / p; }
+    return out;
+  }
+  function ema(src, p) {
+    const n = src.length, out = new Float64Array(n).fill(NaN), k = 2 / (p + 1);
+    let e = 0, s = 0;
+    for (let i = 0; i < n; i++) {
+      if (i < p) { s += src[i]; if (i === p - 1) { e = s / p; out[i] = e; } }
+      else { e = src[i] * k + e * (1 - k); out[i] = e; }
+    }
+    return out;
+  }
+  function rsi(src, p) { // Wilder
+    const n = src.length, out = new Float64Array(n).fill(NaN);
+    let ag = 0, al = 0;
+    for (let i = 1; i < n; i++) {
+      const d = src[i] - src[i - 1], g = d > 0 ? d : 0, ls = d < 0 ? -d : 0;
+      if (i <= p) { ag += g; al += ls; if (i === p) { ag /= p; al /= p; out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al); } }
+      else { ag = (ag * (p - 1) + g) / p; al = (al * (p - 1) + ls) / p; out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al); }
+    }
+    return out;
+  }
+  BT.ind = { sma, ema, rsi };
+
+  /* ---------- strategies [DR-30, DR-31] ---------- */
+  // signals(colsOrBars, params) -> Int8Array; signals[t] uses data <= t only (causal).
+  const STRATS = [
+    { id: 'buyhold', name: 'Buy & Hold', params: [], warmup: () => 0,
+      signals: (C) => new Int8Array(C.n).fill(1) },
+
+    { id: 'smax', name: 'SMA Cross',
+      params: [{ key: 'fast', label: 'Fast SMA', def: 20, min: 2, max: 200, step: 1 },
+               { key: 'slow', label: 'Slow SMA', def: 50, min: 3, max: 400, step: 1 }],
+      warmup: (p) => Math.max(p.fast, p.slow),
+      signals: (C, p) => {
+        const f = sma(C.c, p.fast), s = sma(C.c, p.slow), out = new Int8Array(C.n);
+        for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
+        return out;
+      } },
+
+    { id: 'emax', name: 'EMA Cross',
+      params: [{ key: 'fast', label: 'Fast EMA', def: 12, min: 2, max: 200, step: 1 },
+               { key: 'slow', label: 'Slow EMA', def: 26, min: 3, max: 400, step: 1 }],
+      warmup: (p) => Math.max(p.fast, p.slow),
+      signals: (C, p) => {
+        const f = ema(C.c, p.fast), s = ema(C.c, p.slow), out = new Int8Array(C.n);
+        for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
+        return out;
+      } },
+
+    { id: 'rsimr', name: 'RSI Mean-Rev',
+      params: [{ key: 'period', label: 'RSI period', def: 14, min: 2, max: 100, step: 1 },
+               { key: 'buy', label: 'Buy below', def: 30, min: 5, max: 50, step: 1 },
+               { key: 'sell', label: 'Exit above', def: 55, min: 50, max: 95, step: 1 }],
+      warmup: (p) => p.period + 1,
+      signals: (C, p) => {
+        const r = rsi(C.c, p.period), out = new Int8Array(C.n); let pos = 0;
+        for (let i = 0; i < C.n; i++) {
+          if (isFinite(r[i])) { if (pos === 0 && r[i] < p.buy) pos = 1; else if (pos === 1 && r[i] > p.sell) pos = 0; }
+          out[i] = pos;
+        }
+        return out;
+      } },
+
+    { id: 'donch', name: 'Donchian Breakout',
+      params: [{ key: 'entry', label: 'Entry high (bars)', def: 20, min: 5, max: 200, step: 1 },
+               { key: 'exit', label: 'Exit low (bars)', def: 10, min: 3, max: 200, step: 1 }],
+      warmup: (p) => Math.max(p.entry, p.exit) + 1,
+      signals: (C, p) => {
+        const out = new Int8Array(C.n); let pos = 0;
+        for (let i = 0; i < C.n; i++) {
+          if (i >= p.entry) {
+            let hh = -Infinity; for (let j = i - p.entry; j < i; j++) if (C.h[j] > hh) hh = C.h[j];
+            let ll = Infinity;  for (let j = Math.max(0, i - p.exit); j < i; j++) if (C.l[j] < ll) ll = C.l[j];
+            if (pos === 0 && C.c[i] > hh) pos = 1; else if (pos === 1 && C.c[i] < ll) pos = 0;
+          }
+          out[i] = pos;
+        }
+        return out;
+      } },
+
+    { id: 'macd', name: 'MACD Trend',
+      params: [{ key: 'fast', label: 'Fast', def: 12, min: 2, max: 100, step: 1 },
+               { key: 'slow', label: 'Slow', def: 26, min: 3, max: 200, step: 1 },
+               { key: 'sig', label: 'Signal', def: 9, min: 2, max: 50, step: 1 }],
+      warmup: (p) => p.slow + p.sig,
+      signals: (C, p) => {
+        const f = ema(C.c, p.fast), s = ema(C.c, p.slow), n = C.n;
+        const macd = new Float64Array(n).fill(NaN);
+        for (let i = 0; i < n; i++) if (isFinite(f[i]) && isFinite(s[i])) macd[i] = f[i] - s[i];
+        const first = macd.findIndex(isFinite);
+        const sigLine = new Float64Array(n).fill(NaN);
+        if (first >= 0) {
+          const k = 2 / (p.sig + 1); let e = 0, acc = 0, cnt = 0;
+          for (let i = first; i < n; i++) {
+            if (cnt < p.sig) { acc += macd[i]; cnt++; if (cnt === p.sig) { e = acc / p.sig; sigLine[i] = e; } }
+            else { e = macd[i] * k + e * (1 - k); sigLine[i] = e; }
+          }
+        }
+        const out = new Int8Array(n);
+        for (let i = 0; i < n; i++) out[i] = (isFinite(macd[i]) && isFinite(sigLine[i]) && macd[i] > sigLine[i]) ? 1 : 0;
+        return out;
+      } },
+  ];
+  BT.strategies = STRATS;
+  BT.strategy = (id) => STRATS.find(s => s.id === id);
+
+  /* ---------- core run [DR-10, DR-11, DR-15] ---------- */
+  // opts: {feePct=0.10 [DR-01], slipPct=0 [DR-02], capital=10000 [DR-03], barsPerYear [DR-05], warmup=0}
+  BT.run = function (bars, signals, opts) {
+    const C = bars.n ? bars : colsFromBars(bars);
+    const fee = (opts.feePct ?? 0.10) / 100, slip = (opts.slipPct ?? 0) / 100;
+    const cap = opts.capital ?? 10000, warm = opts.warmup ?? 0;
+    const n = C.n;
+    const equity = new Float64Array(n);
+    const trades = [];
+    let cash = cap, qty = 0, pos = 0, entryIdx = -1, entryPx = 0, entryEq = 0, posBars = 0;
+
+    for (let t = 0; t < n; t++) {
+      // execute yesterday's desired position at today's open [DR-10 no lookahead]
+      if (t > 0 && t > warm) {
+        const want = signals[t - 1];
+        if (want === 1 && pos === 0) {
+          const px = C.o[t] * (1 + slip);
+          entryEq = cash;
+          qty = (cash * (1 - fee)) / px;                 // long-only, full equity [DR-11]
+          cash = 0; pos = 1; entryIdx = t; entryPx = px;
+        } else if (want === 0 && pos === 1) {
+          const px = C.o[t] * (1 - slip);
+          cash = qty * px * (1 - fee);
+          trades.push({ entryIdx, exitIdx: t, entryPx, exitPx: px, ret: cash / entryEq - 1 });
+          qty = 0; pos = 0;
+        }
+      }
+      if (pos === 1) posBars++;
+      equity[t] = cash + qty * C.c[t];
+      if (!(equity[t] >= 0) || cash < -1e-9 || qty < 0) throw new Error('invariant violated @' + t); // [DR-11]
+    }
+    if (pos === 1) { // mark open trade to last close (unrealized)
+      trades.push({ entryIdx, exitIdx: n - 1, entryPx, exitPx: C.c[n - 1], ret: equity[n - 1] / entryEq - 1, open: true });
+    }
+    const metrics = BT.metrics(equity, C, opts.barsPerYear ?? 365, warm, trades, posBars);
+    return { equity, trades, metrics };
+  };
+
+  // Benchmark buy & hold overlay: close-to-close basis (AC-3 ground truth) [DR-35]
+  BT.benchmark = function (C, capital) {
+    const eq = new Float64Array(C.n);
+    for (let i = 0; i < C.n; i++) eq[i] = capital * C.c[i] / C.c[0];
+    return eq;
+  };
+
+  /* ---------- metrics [DR-35] ---------- */
+  BT.metrics = function (equity, C, barsPerYear, warm, trades, posBars) {
+    const n = equity.length;
+    const start = Math.min(warm, n - 1);
+    const e0 = equity[start], eN = equity[n - 1];
+    const totalReturn = eN / e0 - 1;
+    const years = (n - 1 - start) / barsPerYear;
+    const cagr = years > 0 ? Math.pow(eN / e0, 1 / years) - 1 : 0;
+
+    // per-bar simple returns
+    const rets = [];
+    for (let i = start + 1; i < n; i++) rets.push(equity[i] / equity[i - 1] - 1);
+    const m = rets.length ? rets.reduce((a, b) => a + b, 0) / rets.length : 0;
+    let vs = 0, ds = 0, dn = 0;
+    for (const r of rets) { vs += (r - m) * (r - m); if (r < 0) { ds += r * r; dn++; } }
+    const sd = rets.length > 1 ? Math.sqrt(vs / (rets.length - 1)) : 0;
+    const ddev = rets.length ? Math.sqrt(ds / rets.length) : 0;
+    const annVol = sd * Math.sqrt(barsPerYear);
+    const sharpe = sd > 0 ? (m / sd) * Math.sqrt(barsPerYear) : 0;       // rf=0 [DR-04]
+    const sortino = ddev > 0 ? (m / ddev) * Math.sqrt(barsPerYear) : 0;
+
+    // max drawdown depth + duration (bars peak->recovery or end)
+    let peak = equity[start], maxDD = 0, ddStart = start, maxDur = 0, curStart = start;
+    for (let i = start; i < n; i++) {
+      if (equity[i] >= peak) { peak = equity[i]; curStart = i; }
+      const dd = equity[i] / peak - 1;
+      if (dd < maxDD) { maxDD = dd; ddStart = curStart; }
+      if (i - curStart > maxDur) maxDur = i - curStart;
+    }
+    const calmar = maxDD < 0 ? cagr / Math.abs(maxDD) : (cagr > 0 ? Infinity : 0);
+
+    const closed = (trades || []).filter(t => !t.open);
+    const all = trades || [];
+    const wins = all.filter(t => t.ret > 0), losses = all.filter(t => t.ret <= 0);
+    const grossW = wins.reduce((a, t) => a + t.ret, 0), grossL = Math.abs(losses.reduce((a, t) => a + t.ret, 0));
+    return {
+      totalReturn, cagr, annVol, sharpe, sortino,
+      maxDrawdown: maxDD, maxDDBars: maxDur, calmar,
+      exposure: (n - start) > 0 ? (posBars || 0) / (n - start) : 0,
+      trades: all.length, closedTrades: closed.length,
+      winRate: all.length ? wins.length / all.length : 0,
+      profitFactor: grossL > 0 ? grossW / grossL : (grossW > 0 ? Infinity : 0),
+      avgWin: wins.length ? grossW / wins.length : 0,
+      avgLoss: losses.length ? -grossL / losses.length : 0,
+      bars: n, startBar: start,
+    };
+  };
+
+  /* ---------- monthly returns table ---------- */
+  BT.monthlyReturns = function (equity, tsMs, warm) {
+    const out = []; let curKey = null, startEq = null, lastEq = null;
+    for (let i = warm; i < equity.length; i++) {
+      const d = new Date(tsMs[i]);
+      const key = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+      if (key !== curKey) {
+        if (curKey !== null) out.push({ key: curKey, ret: lastEq / startEq - 1 });
+        curKey = key; startEq = lastEq !== null ? lastEq : equity[i];
+      }
+      lastEq = equity[i];
+    }
+    if (curKey !== null) out.push({ key: curKey, ret: lastEq / startEq - 1 });
+    return out;
+  };
+
+  /* ---------- parameter sweep [DR-07] ---------- */
+  BT.sweep = function (bars, stratId, grids, opts, onProgress, shouldStop) {
+    const C = bars.n ? bars : colsFromBars(bars);
+    const strat = BT.strategy(stratId);
+    const keys = Object.keys(grids);
+    const combos = [];
+    (function rec(idx, acc) {
+      if (idx === keys.length) { combos.push({ ...acc }); return; }
+      for (const val of grids[keys[idx]]) { acc[keys[idx]] = val; rec(idx + 1, acc); }
+    })(0, {});
+    const results = [];
+    for (let i = 0; i < combos.length; i++) {
+      if (shouldStop && shouldStop()) return { results, stopped: true, done: i, total: combos.length };
+      const p = combos[i];
+      if (p.fast !== undefined && p.slow !== undefined && p.fast >= p.slow) continue; // degenerate
+      const sig = strat.signals(C, p);
+      const r = BT.run(C, sig, { ...opts, warmup: strat.warmup(p) });
+      results.push({ params: p, m: r.metrics });
+      if (onProgress && (i % 5 === 0)) onProgress(i + 1, combos.length);
+    }
+    results.sort((a, b) => (b.m.sharpe - a.m.sharpe));
+    return { results, stopped: false, done: combos.length, total: combos.length };
+  };
+
+  /* ---------- deterministic demo data [DR-22] ---------- */
+  function mulberry32(seed) { return function () { let t = seed += 0x6D2B79F5; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  BT.demoDataset = function (kind) {
+    const cfg = kind === 'ETH' ? { seed: 20260812, p0: 1400, vol: 0.045 } : { seed: 42421337, p0: 21000, vol: 0.04 };
+    const rnd = mulberry32(cfg.seed);
+    const bars = []; let p = cfg.p0;
+    const t0 = Date.UTC(2020, 7, 1); // fixed epoch — no Date.now [DR-22 deterministic]
+    let drift = 0.0006;
+    for (let i = 0; i < 2200; i++) {
+      if (i % 260 === 0) drift = (rnd() - 0.42) * 0.004;             // regime shifts
+      const shock = (rnd() + rnd() + rnd() - 1.5) / 1.5;              // ~bell
+      const o = p;
+      const c = Math.max(1, p * (1 + drift + shock * cfg.vol));
+      const h = Math.max(o, c) * (1 + rnd() * 0.02);
+      const l = Math.min(o, c) * (1 - rnd() * 0.02);
+      const v = 1000 + rnd() * 5000;
+      bars.push([t0 + i * 86400000, o, h, l, c, v]);
+      p = c;
+    }
+    return bars;
+  };
+
+  /* ---------- ingest guard [DR-16] ---------- */
+  BT.cleanBars = function (raw) {
+    const ok = [], n0 = raw.length;
+    for (const b of raw) {
+      if (b && b.length >= 6 && [b[0], b[1], b[2], b[3], b[4]].every(x => Number.isFinite(x)) && b[4] > 0) ok.push(b.slice(0, 6));
+    }
+    ok.sort((a, b) => a[0] - b[0]);
+    return { bars: ok, dropped: n0 - ok.length };
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = BT;
+  else root.BT = BT;
+})(typeof self !== 'undefined' ? self : this);
+
+</script>
+
+<script>
+/* Backtest Forge — app layer. Engine is loaded from #engine-src (main thread) and re-used
+   verbatim inside a blob Worker [DR-38]. All shared figures cite DR IDs. */
+'use strict';
+const $ = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const fmtPct = (x, dp = 1) => (x >= 0 ? '+' : '') + (x * 100).toFixed(dp) + '%';
+const fmtPctU = (x, dp = 1) => (x * 100).toFixed(dp) + '%';
+const fmtNum = (x, dp = 2) => Number.isFinite(x) ? x.toFixed(dp) : (x === Infinity ? '∞' : '—');
+const fmtMoney = (x) => x >= 1000 ? x.toLocaleString('en-US', { maximumFractionDigits: 0 }) : x.toFixed(2);
+const fmtDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+const TF_MS = { '15m': 9e5, '1h': 36e5, '4h': 144e5, '1d': 864e5 };            // [DR-14]
+const HARD_CAP = 20000;                                                        // [DR-21]
+const PAGE = 1000;                                                             // [DR-08]
+
+/* ---------------- state ---------------- */
+const S = { tf: '1d', selectedKey: null, bars: null, meta: null, lastResult: null, ccxtState: 'unloaded', worker: null, sweepWorker: null };
+
+/* ---------------- IndexedDB [DR-32] ---------------- */
+const DB = (() => {
+  let dbp = null;
+  function open() {
+    if (dbp) return dbp;
+    dbp = new Promise((res, rej) => {
+      const rq = indexedDB.open('btforge', 1);
+      rq.onupgradeneeded = () => { rq.result.createObjectStore('datasets'); rq.result.createObjectStore('settings'); };
+      rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+    });
+    return dbp;
+  }
+  async function tx(store, mode, fn) {
+    const db = await open();
+    return new Promise((res, rej) => {
+      const t = db.transaction(store, mode), st = t.objectStore(store);
+      const out = fn(st);
+      t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+      t.onerror = () => rej(t.error);
+    });
+  }
+  return {
+    put: (store, key, val) => tx(store, 'readwrite', st => st.put(val, key)),
+    get: async (store, key) => { const db = await open(); return new Promise((res, rej) => { const r = db.transaction(store).objectStore(store).get(key); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
+    del: (store, key) => tx(store, 'readwrite', st => st.delete(key)),
+    keys: async (store) => { const db = await open(); return new Promise((res, rej) => { const r = db.transaction(store).objectStore(store).getAllKeys(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
+    all: async (store) => { const db = await open(); return new Promise((res, rej) => { const r = db.transaction(store).objectStore(store).getAll(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
+    clear: (store) => tx(store, 'readwrite', st => st.clear()),
+  };
+})();
+
+/* ---------------- worker from embedded engine [DR-38] ---------------- */
+const ENGINE_SRC = document.getElementById('engine-src').textContent;
+const WORKER_HARNESS = `
+self.onmessage = function (e) {
+  const m = e.data;
+  try {
+    if (m.cmd === 'run') {
+      const C = BT.colsFromBars(m.bars);
+      const strat = BT.strategy(m.stratId);
+      const warm = strat.warmup(m.params);
+      const sig = strat.signals(C, m.params);
+      const r = BT.run(C, sig, Object.assign({}, m.opts, { warmup: warm }));
+      const bench = BT.benchmark(C, m.opts.capital);
+      const monthly = BT.monthlyReturns(r.equity, C.ts, warm);
+      self.postMessage({ id: m.id, ok: true, kind: 'run',
+        equity: Array.from(r.equity), bench: Array.from(bench), trades: r.trades,
+        metrics: r.metrics, monthly, warm,
+        benchTotal: bench[C.n - 1] / bench[0] - 1 });
+    } else if (m.cmd === 'sweep') {
+      const t0 = performance.now();
+      const sw = BT.sweep(m.bars, m.stratId, m.grids, m.opts,
+        (done, total) => self.postMessage({ id: m.id, kind: 'progress', done, total }));
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results: sw.results.slice(0, 200).map(r => ({ params: r.params, m: r.m })), total: sw.total, ms: performance.now() - t0 });
+    }
+  } catch (err) { self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) }); }
+};`;
+function makeWorker() {
+  const blob = new Blob([ENGINE_SRC, WORKER_HARNESS], { type: 'application/javascript' });
+  return new Worker(URL.createObjectURL(blob));
+}
+let msgId = 0;
+function workerCall(worker, payload, onProgress) {
+  return new Promise((resolve, reject) => {
+    const id = ++msgId;
+    const h = (e) => {
+      const m = e.data;
+      if (m.id !== id) return;
+      if (m.kind === 'progress') { onProgress && onProgress(m.done, m.total); return; }
+      worker.removeEventListener('message', h);
+      m.ok ? resolve(m) : reject(new Error(m.error));
+    };
+    worker.addEventListener('message', h);
+    worker.postMessage({ ...payload, id });
+  });
+}
+
+/* ---------------- navigation ---------------- */
+const SCREENS = { data: 'scr-data', strat: 'scr-strat', results: 'scr-results', sweep: 'scr-sweep', set: 'scr-set' };
+function nav(name) {
+  $$('.screen').forEach(s => s.classList.remove('active'));
+  $('#' + SCREENS[name]).classList.add('active');
+  $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.nav === name));
+  window.scrollTo(0, 0);
+  if (name === 'strat' || name === 'sweep') refreshDsBanners();
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-nav]');
+  if (b) nav(b.dataset.nav);
+});
+
+/* ---------------- symbol normalization [DR-13] ---------------- */
+const QUOTES = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'BTC', 'ETH', 'BNB', 'EUR', 'TRY', 'USD'];
+function normalizeSymbol(raw) {
+  let s = String(raw || '').trim().toUpperCase().replace(/[-_\s]+/g, '/');
+  if (!s.includes('/')) { for (const q of QUOTES) if (s.endsWith(q) && s.length > q.length) { s = s.slice(0, -q.length) + '/' + q; break; } }
+  return /^[A-Z0-9]{2,10}\/[A-Z0-9]{2,10}$/.test(s) ? s : null;
+}
+
+/* ---------------- fetch: ccxt lazy → REST fallback [DR-20, DR-23] ---------------- */
+function loadCcxt(timeoutMs) {
+  if (window.ccxt) return Promise.resolve(true);
+  if (S.ccxtState === 'failed') return Promise.resolve(false);
+  return new Promise((res) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/ccxt/dist/ccxt.browser.min.js';
+    const to = setTimeout(() => { S.ccxtState = 'failed'; sc.remove(); res(false); }, timeoutMs || 12000);
+    sc.onload = () => { clearTimeout(to); S.ccxtState = 'loaded'; res(!!window.ccxt); };
+    sc.onerror = () => { clearTimeout(to); S.ccxtState = 'failed'; res(false); };
+    document.head.appendChild(sc);
+  });
+}
+async function getProxy() { return (await DB.get('settings', 'proxy')) || ''; }
+
+function classifyFetchError(err, resp) {                                        /* [DR-34] */
+  if (resp) {
+    if (resp.status === 429 || resp.status === 418) return 'RATE-LIMIT';
+    if (resp.status === 400) return 'BAD-SYMBOL';
+    return 'BLOCKED';
+  }
+  if (!navigator.onLine) return 'NETWORK';
+  return 'BLOCKED';
+}
+const ERR_TEXT = {                                                              /* [DR-34] */
+  'NETWORK': 'You appear to be offline. Live data needs a connection — demo datasets still work.',
+  'BLOCKED': 'Binance did not respond to this browser — usually a CORS block or a network filter. A proxy URL in Settings can route around it, or use demo data.',
+  'BAD-SYMBOL': 'Binance does not recognise that symbol. Check the spelling — format is BASE/QUOTE, e.g. BTC/USDT.',
+  'RATE-LIMIT': 'Binance is rate-limiting this device. Wait a minute, then retry.',
+  'EMPTY': 'Binance returned no candles for that symbol and timeframe.',
+};
+
+async function fetchREST(symbol, tf, depth, onPage) {
+  const proxy = await getProxy();
+  const sym = symbol.replace('/', '');
+  const tfms = TF_MS[tf];
+  const out = [];
+  let end = Date.now();
+  while (out.length < depth) {
+    const want = Math.min(PAGE, depth - out.length);
+    const url = proxy + `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${want}&endTime=${end}`;
+    let resp;
+    try { resp = await fetch(url); }
+    catch (err) { throw { cause: classifyFetchError(err, null) }; }
+    if (!resp.ok) throw { cause: classifyFetchError(null, resp) };
+    const rows = await resp.json();
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    const page = rows.map(r => [r[0], +r[1], +r[2], +r[3], +r[4], +r[5]]);
+    out.unshift(...page);
+    onPage && onPage(out.length);
+    if (rows.length < want) break;                    // reached history start
+    end = page[0][0] - 1;
+  }
+  if (out.length === 0) throw { cause: 'EMPTY' };
+  return { bars: out, source: 'rest' };
+}
+async function fetchCCXT(symbol, tf, depth, onPage) {
+  const ex = new ccxt.binance({ enableRateLimit: true });
+  const tfms = TF_MS[tf];
+  let since = Date.now() - depth * tfms;
+  const out = [];
+  while (out.length < depth) {
+    const page = await ex.fetchOHLCV(symbol, tf, since, Math.min(PAGE, depth - out.length));
+    if (!page || page.length === 0) break;
+    out.push(...page);
+    onPage && onPage(out.length);
+    since = page[page.length - 1][0] + tfms;
+    if (page.length < PAGE && out.length >= depth) break;
+    if (page.length === 0) break;
+  }
+  if (out.length === 0) throw { cause: 'EMPTY' };
+  return { bars: out, source: 'ccxt' };
+}
+
+async function doFetch() {
+  const btn = $('#fetchBtn'), status = $('#fetchStatus');
+  const selVal = $('#symSel').value;
+  const raw = selVal === '__custom' ? $('#symCustom').value : selVal;
+  const symbol = normalizeSymbol(raw);
+  if (!symbol) {
+    status.innerHTML = `<div class="errline">✕ &nbsp;“${(raw || '(empty)')}” isn’t a valid symbol. Use BASE/QUOTE, e.g. BTC/USDT.</div>`;
+    return;
+  }
+  if (selVal === '__custom') $('#symHint').textContent = 'Interpreted as ' + symbol;
+  const tf = S.tf, depth = Math.min(HARD_CAP, +$('#depthSel').value);
+  btn.disabled = true;
+  status.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; Contacting Binance…</div>`;
+  const onPage = (n) => { status.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; ${n.toLocaleString()} / ${depth.toLocaleString()} candles…</div>`; };
+  try {
+    let res = null;
+    if (await loadCcxt(12000)) {
+      try { res = await fetchCCXT(symbol, tf, depth, onPage); }
+      catch (e) { res = null; }                        // fall through to REST [DR-20]
+    }
+    if (!res) res = await fetchREST(symbol, tf, depth, onPage);
+    const cleaned = BT.cleanBars(res.bars);            /* [DR-16] */
+    if (cleaned.bars.length < 10) throw { cause: 'EMPTY' };
+    const key = `binance|${symbol}|${tf}`;
+    await DB.put('datasets', key, {
+      meta: { exchange: 'binance', symbol, tf, fetchedAt: Date.now(), source: res.source, demo: false, dropped: cleaned.dropped },
+      bars: cleaned.bars,
+    });
+    await selectDataset(key);
+    status.innerHTML = `<div class="okline">✓ &nbsp;${cleaned.bars.length.toLocaleString()} candles saved (${res.source === 'ccxt' ? 'via ccxt' : 'via direct REST'})${cleaned.dropped ? ' · ' + cleaned.dropped + ' bad rows dropped' : ''}. Selected.</div>
+      <button class="btn" data-nav="strat">Continue → set up backtest</button>`;
+    renderDsList();
+  } catch (e) {
+    const cause = (e && e.cause) || 'BLOCKED';
+    status.innerHTML = `
+      <div class="errline">✕ &nbsp;<b>${cause}</b> — ${ERR_TEXT[cause]}</div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" id="retryBtn">Retry</button>
+        <button class="mini" id="useDemoBtn">Use demo data</button>
+        <button class="mini" data-nav="set">Open Settings</button>
+      </div>`;
+    $('#retryBtn').onclick = doFetch;
+    $('#useDemoBtn').onclick = async () => { await selectDataset('demo|BTC/USDT|1d'); renderDsList(); nav('strat'); };
+  } finally { btn.disabled = false; }
+}
+
+/* ---------------- datasets ---------------- */
+async function seedDemos(force) {
+  const keys = await DB.keys('datasets');
+  const have = keys.some(k => String(k).startsWith('demo|'));
+  if (have && !force) return;
+  for (const kind of ['BTC', 'ETH']) {                                          /* [DR-22] */
+    const bars = BT.demoDataset(kind);
+    await DB.put('datasets', `demo|${kind}/USDT|1d`, {
+      meta: { exchange: 'demo', symbol: `${kind}/USDT`, tf: '1d', fetchedAt: 0, source: 'demo', demo: true, dropped: 0 }, bars,
+    });
+  }
+}
+async function selectDataset(key) {
+  const rec = await DB.get('datasets', key);
+  if (!rec) return false;
+  S.selectedKey = key; S.bars = rec.bars; S.meta = rec.meta;
+  await DB.put('settings', 'selectedKey', key);
+  $('#dsBadge').textContent = (rec.meta.demo ? 'DEMO ' : '') + rec.meta.symbol + ' · ' + rec.meta.tf + ' · ' + rec.bars.length.toLocaleString();
+  refreshDsBanners();
+  return true;
+}
+function refreshDsBanners() {
+  const none = !S.selectedKey;
+  $('#noDsBanner').style.display = none ? '' : 'none';
+  $('#noDsBanner2').style.display = none ? '' : 'none';
+  $('#runBtn').disabled = none;
+  $('#swRunBtn').disabled = none;
+}
+async function renderDsList() {
+  const keys = await DB.keys('datasets');
+  const box = $('#dsList'); box.innerHTML = '';
+  if (!keys.length) { box.innerHTML = '<div class="empty"><p>No datasets. Fetch above, or restore demo data in Settings.</p></div>'; return; }
+  for (const key of keys.sort()) {
+    const rec = await DB.get('datasets', key);
+    const m = rec.meta;
+    const div = document.createElement('div');
+    div.className = 'ds' + (key === S.selectedKey ? ' sel' : '');
+    div.innerHTML = `
+      <div class="t"><b>${m.symbol}</b> <span class="sub">· ${m.tf}</span>
+        <div class="sub">${rec.bars.length.toLocaleString()} bars · ${fmtDate(rec.bars[0][0])} → ${fmtDate(rec.bars[rec.bars.length - 1][0])}</div></div>
+      <span class="badge ${m.demo ? 'demo' : 'live'}">${m.demo ? 'DEMO · synthetic' : (m.source === 'ccxt' ? 'Binance · ccxt' : 'Binance · REST')}</span>
+      <button class="mini" data-del="${key}">✕</button>`;
+    div.addEventListener('click', async (e) => {
+      if (e.target.closest('[data-del]')) {
+        e.stopPropagation();
+        if (!confirm('Delete dataset ' + m.symbol + ' ' + m.tf + '?')) return;
+        await DB.del('datasets', key);
+        if (S.selectedKey === key) { S.selectedKey = null; S.bars = null; $('#dsBadge').textContent = 'no dataset'; await DB.del('settings', 'selectedKey'); }
+        renderDsList(); refreshDsBanners(); return;
+      }
+      await selectDataset(key); renderDsList();
+    });
+    box.appendChild(div);
+  }
+}
+
+/* ---------------- strategy screen [DR-30, DR-31] ---------------- */
+const STRAT_HINTS = {
+  buyhold: 'Buys at the start and holds. The baseline everything else must beat.',
+  smax: 'In the market while the fast average is above the slow one. Classic trend-following.',
+  emax: 'Like SMA cross but averages react faster to recent prices.',
+  rsimr: 'Buys after sharp dips (RSI low), exits after recovery. Mean-reversion.',
+  donch: 'Buys new highs, exits new lows. Breakout trend-following.',
+  macd: 'In the market while MACD momentum is positive.',
+};
+function fillStratSelect(sel) {
+  sel.innerHTML = BT.strategies.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+}
+function renderParams() {
+  const s = BT.strategy($('#stratSel').value);
+  $('#stratHint').textContent = STRAT_HINTS[s.id] || '';
+  const box = $('#paramBox'); box.innerHTML = '';
+  for (const p of s.params) {
+    box.insertAdjacentHTML('beforeend', `
+      <label class="f">${p.label}</label>
+      <input type="number" data-param="${p.key}" value="${p.def}" min="${p.min}" max="${p.max}" step="${p.step}" inputmode="numeric">`);
+  }
+  validateParams();
+}
+function readParams(root) {
+  const out = {};
+  $$('[data-param]', root).forEach(i => out[i.dataset.param] = +i.value);
+  return out;
+}
+function validateParams() {
+  const s = BT.strategy($('#stratSel').value);
+  const p = readParams($('#paramBox'));
+  const warn = $('#paramWarn'); warn.innerHTML = '';
+  let ok = true;
+  for (const q of s.params) {
+    const v = p[q.key];
+    if (!Number.isFinite(v) || v < q.min || v > q.max) { warn.innerHTML = `<div class="errline">✕ &nbsp;${q.label} must be between ${q.min} and ${q.max}.</div>`; ok = false; }
+  }
+  if (ok && p.fast !== undefined && p.slow !== undefined && p.fast >= p.slow) {
+    warn.innerHTML = `<div class="errline">✕ &nbsp;Fast (${p.fast}) must be smaller than Slow (${p.slow}) — otherwise the “fast” line isn’t fast. Try 20 / 50.</div>`;
+    ok = false;
+  }
+  const fee = +$('#feeIn').value;
+  const fw = $('#feeWarn'); fw.innerHTML = '';
+  if (Number.isFinite(fee) && fee > 1) fw.innerHTML = `<div class="warnline">⚠ &nbsp;${fee}% <b>per side</b> is unusually high — typical spot fee is 0.10%. Did you mean 0.${String(fee).replace('.', '')}%?</div>`;
+  if (!Number.isFinite(fee) || fee < 0 || fee > 25) { fw.innerHTML = `<div class="errline">✕ &nbsp;Fee must be between 0 and 25 (% per side).</div>`; ok = false; }
+  const cap = +$('#capIn').value;
+  if (!Number.isFinite(cap) || cap <= 0) { fw.innerHTML += `<div class="errline">✕ &nbsp;Starting capital must be a positive number.</div>`; ok = false; }
+  $('#runBtn').disabled = !ok || !S.selectedKey;
+  return ok;
+}
+
+async function runBacktest() {
+  if (!validateParams()) return;
+  const btn = $('#runBtn'), st = $('#runStatus');
+  btn.disabled = true;
+  st.innerHTML = `<div class="hint" style="margin-top:10px"><span class="spin"></span>&nbsp; Running on ${S.bars.length.toLocaleString()} bars…</div>`;
+  const stratId = $('#stratSel').value;
+  const params = readParams($('#paramBox'));
+  const opts = {
+    feePct: +$('#feeIn').value,                         /* [DR-01, DR-15] */
+    slipPct: +$('#slipIn').value,                       /* [DR-02] */
+    capital: +$('#capIn').value,                        /* [DR-03] */
+    barsPerYear: BT.barsPerYear(BT.TF_SECONDS[S.meta.tf]),  /* [DR-05] */
+  };
+  try {
+    if (!S.worker) S.worker = makeWorker();
+    const res = await workerCall(S.worker, { cmd: 'run', bars: S.bars, stratId, params, opts });
+    S.lastResult = { res, stratId, params, opts, meta: S.meta, ts: S.bars.map(b => b[0]), closes: S.bars.map(b => b[4]), opens: S.bars.map(b => b[1]), highs: S.bars.map(b => b[2]), lows: S.bars.map(b => b[3]) };
+    st.innerHTML = '';
+    nav('results');            // must be visible BEFORE charts size themselves
+    renderResults();
+  } catch (e) {
+    st.innerHTML = `<div class="errline">✕ &nbsp;Backtest failed: ${e.message}. Parameters and dataset are unchanged — adjust and re-run.</div>`;
+  } finally { btn.disabled = !S.selectedKey; }
+}
+
+/* ---------------- charts (canvas, DPR-aware) [DR-33, DR-39] ---------------- */
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = cv.getBoundingClientRect();
+  if (rect.width < 2) { rect.width = 300; rect.height = 190; } // hidden-layout guard
+  cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.height * dpr);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: rect.width, h: rect.height };
+}
+function niceTicks(lo, hi, n) {
+  if (!(hi > lo)) hi = lo + 1;
+  const span = hi - lo, step0 = Math.pow(10, Math.floor(Math.log10(span / n)));
+  const err = span / n / step0;
+  const step = step0 * (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1);
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(v);
+  return ticks;
+}
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function drawFrame(ctx, w, h, pad, yLo, yHi, fmtY) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = '10px system-ui'; ctx.textBaseline = 'middle';
+  const ticks = niceTicks(yLo, yHi, 4);
+  for (const t of ticks) {
+    const y = pad.t + (h - pad.t - pad.b) * (1 - (t - yLo) / (yHi - yLo));
+    ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+    ctx.fillStyle = css('--muted'); ctx.textAlign = 'left';
+    ctx.fillText(fmtY(t), w - pad.r + 4, y);
+  }
+  return ticks;
+}
+function xDateLabels(ctx, w, h, pad, ts, warm) {
+  const n = ts.length; if (n < 2) return;
+  ctx.fillStyle = css('--muted'); ctx.font = '10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const count = w > 500 ? 5 : 3;
+  for (let i = 0; i < count; i++) {
+    const idx = Math.round(warm + (n - 1 - warm) * i / (count - 1));
+    const x = pad.l + (w - pad.l - pad.r) * (idx - warm) / (n - 1 - warm);
+    ctx.fillText(fmtDate(ts[idx]).slice(0, 7), Math.min(Math.max(x, pad.l + 20), w - pad.r - 20), h - pad.b + 5);
+  }
+}
+function attachTip(cv, wrap, getRow) {
+  let tip = wrap.querySelector('.tip');
+  if (!tip) { tip = document.createElement('div'); tip.className = 'tip'; wrap.appendChild(tip); }
+  const move = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    const row = getRow(x, rect.width);
+    if (!row) { tip.style.display = 'none'; return; }
+    tip.innerHTML = row.html;
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(4, x - tw / 2), rect.width - tw - 4) + 'px';
+    tip.style.top = '6px';
+  };
+  let hideTO = null;
+  const moveKeep = (e) => { clearTimeout(hideTO); move(e); };
+  cv.addEventListener('pointermove', moveKeep);
+  cv.addEventListener('pointerdown', moveKeep);
+  cv.addEventListener('pointerleave', (e) => {
+    // touch pointers "leave" immediately after lift — keep the tooltip readable [DR-39]
+    if (e.pointerType === 'touch') hideTO = setTimeout(() => tip.style.display = 'none', 2200);
+    else tip.style.display = 'none';
+  });
+}
+
+function drawPriceChart(wrap, R) {
+  const cv = wrap.querySelector('canvas');
+  const { ctx, w, h } = setupCanvas(cv);
+  const pad = { l: 6, r: 46, t: 10, b: 18 };
+  const n = R.closes.length, warm = 0;
+  const lo = Math.min(...R.lows), hi = Math.max(...R.highs);
+  drawFrame(ctx, w, h, pad, lo, hi, v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(v < 10 ? 2 : 0));
+  const X = i => pad.l + (w - pad.l - pad.r) * i / (n - 1);
+  const Y = v => pad.t + (h - pad.t - pad.b) * (1 - (v - lo) / (hi - lo));
+  if (n <= 400) {           // candles
+    const bw = Math.max(1.5, (w - pad.l - pad.r) / n * 0.7);
+    for (let i = 0; i < n; i++) {
+      const up = R.closes[i] >= R.opens[i];
+      ctx.strokeStyle = ctx.fillStyle = up ? css('--up') : css('--down');
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(X(i), Y(R.highs[i])); ctx.lineTo(X(i), Y(R.lows[i])); ctx.stroke();
+      const y1 = Y(Math.max(R.opens[i], R.closes[i])), y2 = Y(Math.min(R.opens[i], R.closes[i]));
+      ctx.fillRect(X(i) - bw / 2, y1, bw, Math.max(1, y2 - y1));
+    }
+  } else {                  // close line
+    ctx.strokeStyle = css('--ink2'); ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) i ? ctx.lineTo(X(i), Y(R.closes[i])) : ctx.moveTo(X(i), Y(R.closes[i]));
+    ctx.stroke();
+  }
+  // trade markers with 2px surface ring
+  for (const t of R.res.trades) {
+    const mark = (idx, px, up) => {
+      const x = X(idx), y = Y(px);
+      ctx.fillStyle = css('--surface');
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
+      ctx.fillStyle = up ? css('--up') : css('--down');
+      ctx.beginPath();
+      if (up) { ctx.moveTo(x, y - 4.5); ctx.lineTo(x + 4, y + 3.5); ctx.lineTo(x - 4, y + 3.5); }
+      else { ctx.moveTo(x, y + 4.5); ctx.lineTo(x + 4, y - 3.5); ctx.lineTo(x - 4, y - 3.5); }
+      ctx.closePath(); ctx.fill();
+    };
+    mark(t.entryIdx, t.entryPx, true);
+    if (!t.open) mark(t.exitIdx, t.exitPx, false);
+  }
+  xDateLabels(ctx, w, h, pad, R.ts, 0);
+  attachTip(cv, wrap, (x, cw) => {
+    const i = Math.round((x - pad.l) / (cw - pad.l - pad.r) * (n - 1));
+    if (i < 0 || i >= n) return null;
+    return { html: `<b>${fmtDate(R.ts[i])}</b><br>O ${R.opens[i].toFixed(2)} · C ${R.closes[i].toFixed(2)}` };
+  });
+}
+function drawEquityChart(wrap, R) {
+  const cv = wrap.querySelector('canvas');
+  const { ctx, w, h } = setupCanvas(cv);
+  const pad = { l: 6, r: 46, t: 10, b: 18 };
+  const eq = R.res.equity, bench = R.res.bench, n = eq.length, warm = R.res.warm;
+  const all = eq.slice(warm).concat(bench.slice(warm));
+  const lo = Math.min(...all), hi = Math.max(...all);
+  drawFrame(ctx, w, h, pad, lo, hi, v => (v / 1000).toFixed(1) + 'k');
+  const X = i => pad.l + (w - pad.l - pad.r) * (i - warm) / (n - 1 - warm);
+  const Y = v => pad.t + (h - pad.t - pad.b) * (1 - (v - lo) / (hi - lo));
+  const line = (arr, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = warm; i < n; i++) i > warm ? ctx.lineTo(X(i), Y(arr[i])) : ctx.moveTo(X(i), Y(arr[i]));
+    ctx.stroke();
+  };
+  line(bench, css('--s2'));
+  line(eq, css('--s1'));
+  xDateLabels(ctx, w, h, pad, R.ts, warm);
+  attachTip(cv, wrap, (x, cw) => {
+    const i = Math.round(warm + (x - pad.l) / (cw - pad.l - pad.r) * (n - 1 - warm));
+    if (i < warm || i >= n) return null;
+    return { html: `<b>${fmtDate(R.ts[i])}</b><br><span style="color:${css('--s1')}">●</span> Strategy ${fmtMoney(eq[i])}<br><span style="color:${css('--s2')}">●</span> Buy&amp;Hold ${fmtMoney(bench[i])}` };
+  });
+}
+function drawDDChart(wrap, R) {
+  const cv = wrap.querySelector('canvas');
+  const { ctx, w, h } = setupCanvas(cv);
+  const pad = { l: 6, r: 46, t: 8, b: 18 };
+  const eq = R.res.equity, n = eq.length, warm = R.res.warm;
+  const dd = new Array(n).fill(0);
+  let peak = eq[warm];
+  for (let i = warm; i < n; i++) { if (eq[i] > peak) peak = eq[i]; dd[i] = eq[i] / peak - 1; }
+  const lo = Math.min(...dd.slice(warm), -0.01);
+  drawFrame(ctx, w, h, pad, lo, 0, v => (v * 100).toFixed(0) + '%');
+  const X = i => pad.l + (w - pad.l - pad.r) * (i - warm) / (n - 1 - warm);
+  const Y = v => pad.t + (h - pad.t - pad.b) * (1 - (v - lo) / (0 - lo));
+  ctx.beginPath(); ctx.moveTo(X(warm), Y(0));
+  for (let i = warm; i < n; i++) ctx.lineTo(X(i), Y(dd[i]));
+  ctx.lineTo(X(n - 1), Y(0)); ctx.closePath();
+  ctx.fillStyle = 'rgba(208,59,59,0.25)'; ctx.fill();
+  ctx.strokeStyle = css('--crit'); ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let i = warm; i < n; i++) i > warm ? ctx.lineTo(X(i), Y(dd[i])) : ctx.moveTo(X(i), Y(dd[i]));
+  ctx.stroke();
+  xDateLabels(ctx, w, h, pad, R.ts, warm);
+  attachTip(cv, wrap, (x, cw) => {
+    const i = Math.round(warm + (x - pad.l) / (cw - pad.l - pad.r) * (n - 1 - warm));
+    if (i < warm || i >= n) return null;
+    return { html: `<b>${fmtDate(R.ts[i])}</b><br>Drawdown ${fmtPctU(dd[i])}` };
+  });
+}
+
+/* diverging monthly grid: blue↔red, neutral gray midpoint (reference diverging pair) */
+function divergeColor(v, maxAbs) {
+  if (!Number.isFinite(v) || maxAbs === 0) return 'var(--div-mid)';
+  const t = Math.min(1, Math.abs(v) / maxAbs);
+  const a = (0.12 + 0.55 * t).toFixed(2);
+  return v >= 0 ? `rgba(57,135,229,${a})` : `rgba(230,103,103,${a})`;
+}
+function renderMonthly(el, monthly) {
+  const byYear = {};
+  for (const m of monthly) { const [y, mo] = m.key.split('-'); (byYear[y] = byYear[y] || {})[+mo] = m.ret; }
+  const years = Object.keys(byYear).sort();
+  const maxAbs = Math.max(0.001, ...monthly.map(m => Math.abs(m.ret)));
+  let html = '<div class="mo"><div class="hd"></div>' + ['J','F','M','A','M','J','J','A','S','O','N','D'].map(m => `<div class="hd">${m}</div>`).join('');
+  for (const y of years) {
+    html += `<div class="yr">${y}</div>`;
+    for (let mo = 1; mo <= 12; mo++) {
+      const v = byYear[y][mo];
+      html += v === undefined ? '<div></div>' : `<div style="background:${divergeColor(v, maxAbs)}" title="${y}-${mo}: ${fmtPct(v)}">${(v * 100).toFixed(0)}</div>`;
+    }
+  }
+  el.innerHTML = html + '</div>';
+}
+
+/* ---------------- results screen ---------------- */
+const METRIC_HELP = {
+  sharpe: 'Return per unit of risk. Rough guide: <0.5 weak · 0.5–1 fair · 1–2 good · >2 excellent.',
+  maxdd: 'Worst peak-to-trough loss you would have sat through. Duration = longest stretch below a prior peak.',
+  cagr: 'Compound annual growth rate — the smoothed yearly return.',
+  pf: 'Gross wins ÷ gross losses. >1 means winners outweigh losers.',
+};
+function tile(k, v, cls, cap) {
+  return `<div class="tile"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div>${cap ? `<div class="c">${cap}</div>` : ''}</div>`;
+}
+function renderResults() {
+  const R = S.lastResult; if (!R) return;
+  $('#resEmpty').style.display = 'none';
+  const m = R.res.metrics;
+  const stratName = BT.strategy(R.stratId).name;
+  const pTxt = Object.entries(R.params).map(([k, v]) => `${k} ${v}`).join(' · ') || '—';
+  const alpha = m.totalReturn - R.res.benchTotal;
+  const demoNote = R.meta.demo ? `<div class="warnline">⚠ &nbsp;This is <b>synthetic demo data</b> — results prove the engine, not the strategy. Fetch real Binance data for real analysis.</div>` : '';
+  $('#resBody').style.display = '';
+  $('#resBody').innerHTML = `
+    ${demoNote}
+    <div class="card" style="padding:12px 14px">
+      <b>${stratName}</b> <span class="note">on ${R.meta.demo ? 'DEMO ' : ''}${R.meta.symbol} ${R.meta.tf}</span>
+      <div class="hint">${pTxt} · fee ${R.opts.feePct}%/side · slip ${R.opts.slipPct}% · ${fmtDate(R.ts[0])} → ${fmtDate(R.ts[R.ts.length - 1])}</div>
+    </div>
+    <div class="tiles">
+      ${tile('Total return', fmtPct(m.totalReturn), m.totalReturn >= 0 ? 'pos' : 'neg', 'vs Buy&Hold ' + fmtPct(R.res.benchTotal) + ' (' + fmtPct(alpha) + ' alpha)')}
+      ${tile('CAGR', fmtPct(m.cagr), m.cagr >= 0 ? 'pos' : 'neg', METRIC_HELP.cagr)}
+      ${tile('Sharpe', fmtNum(m.sharpe), '', METRIC_HELP.sharpe)}
+      ${tile('Max drawdown', fmtPctU(m.maxDrawdown), 'neg', m.maxDDBars + ' bars underwater · ' + METRIC_HELP.maxdd)}
+    </div>
+    <h2>Risk &amp; trade stats</h2>
+    <div class="mgrid">
+      ${tile('Ann. vol', fmtPctU(m.annVol))}
+      ${tile('Sortino', fmtNum(m.sortino))}
+      ${tile('Calmar', fmtNum(m.calmar))}
+      ${tile('Exposure', fmtPctU(m.exposure, 0))}
+      ${tile('Trades', m.trades + (m.trades !== m.closedTrades ? ' (1 open)' : ''))}
+      ${tile('Win rate', fmtPctU(m.winRate, 0))}
+      ${tile('Profit factor', fmtNum(m.profitFactor), '', '')}
+      ${tile('Avg win', fmtPct(m.avgWin), 'pos')}
+      ${tile('Avg loss', fmtPct(m.avgLoss), 'neg')}
+      ${(() => { const tr = R.res.trades; if (!tr.length) return tile('Best / worst', '—');
+        const best = Math.max(...tr.map(t => t.ret)), worst = Math.min(...tr.map(t => t.ret));
+        const avgBars = tr.reduce((a, t) => a + (t.exitIdx - t.entryIdx), 0) / tr.length;
+        return tile('Best trade', fmtPct(best), best >= 0 ? 'pos' : 'neg') +
+               tile('Worst trade', fmtPct(worst), worst >= 0 ? 'pos' : 'neg') +
+               tile('Avg bars/trade', avgBars.toFixed(0)); })()}
+    </div>
+    <h2>Equity vs Buy &amp; Hold</h2>
+    <div class="legend"><span><span class="sw" style="background:var(--s1)"></span>Strategy</span><span><span class="sw" style="background:var(--s2)"></span>Buy &amp; Hold</span></div>
+    <div class="chartwrap" id="chEq"><canvas class="chart tall"></canvas></div>
+    <h2>Price &amp; trades <span style="text-transform:none;letter-spacing:0">(▲ buy · ▼ sell)</span></h2>
+    <div class="chartwrap" id="chPx"><canvas class="chart tall"></canvas></div>
+    <h2>Drawdown</h2>
+    <div class="chartwrap" id="chDD"><canvas class="chart"></canvas></div>
+    <h2>Monthly returns %</h2>
+    <div id="chMo"></div>
+    <h2>Trades (${R.res.trades.length}${R.res.trades.length > 100 ? ', last 100 shown' : ''})</h2>
+    <div class="card scrollx" style="padding:6px 10px">
+      <table><thead><tr><th>#</th><th>Entry</th><th>Exit</th><th>Bars</th><th>Entry px</th><th>Exit px</th><th>Return</th></tr></thead>
+      <tbody>${R.res.trades.slice(-100).map((t, i) => `
+        <tr><td>${i + 1}</td><td>${fmtDate(R.ts[t.entryIdx])}</td><td>${t.open ? 'open' : fmtDate(R.ts[t.exitIdx])}</td>
+        <td>${t.exitIdx - t.entryIdx}</td><td>${t.entryPx.toFixed(2)}</td><td>${t.exitPx.toFixed(2)}</td>
+        <td class="${t.ret >= 0 ? 'pos' : 'neg'}">${fmtPct(t.ret, 2)}</td></tr>`).join('')}</tbody></table>
+    </div>`;
+  drawEquityChart($('#chEq'), R);
+  drawPriceChart($('#chPx'), R);
+  drawDDChart($('#chDD'), R);
+  renderMonthly($('#chMo'), R.res.monthly);
+}
+let resizeTO = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTO);
+  resizeTO = setTimeout(() => { if (S.lastResult && $('#scr-results').classList.contains('active')) renderResults(); }, 200);
+});
+
+/* ---------------- sweep ---------------- */
+function renderSweepBox() {
+  const s = BT.strategy($('#swStratSel').value);
+  const box = $('#swBox'); box.innerHTML = '';
+  if (!s.params.length) { box.innerHTML = '<p class="hint">Buy &amp; Hold has no parameters to sweep — pick another strategy.</p>'; return; }
+  for (const p of s.params) {
+    const from = Math.max(p.min, Math.round(p.def * 0.5));
+    const to = Math.min(p.max, Math.round(p.def * 1.6));
+    const step = Math.max(p.step, Math.round((to - from) / 5) || p.step);
+    box.insertAdjacentHTML('beforeend', `
+      <label class="f">${p.label} — from / to / step</label>
+      <div class="row" data-sw="${p.key}">
+        <input type="number" data-r="from" value="${from}" min="${p.min}" max="${p.max}" inputmode="numeric" style="flex:1">
+        <input type="number" data-r="to" value="${to}" min="${p.min}" max="${p.max}" inputmode="numeric" style="flex:1">
+        <input type="number" data-r="step" value="${step}" min="${p.step}" inputmode="numeric" style="flex:1">
+      </div>`);
+  }
+}
+function sweepGrids() {
+  const grids = {};
+  let combos = 1;
+  for (const row of $$('[data-sw]')) {
+    const from = +$('[data-r=from]', row).value, to = +$('[data-r=to]', row).value, step = +$('[data-r=step]', row).value;
+    if (!(step > 0) || !(to >= from)) return { err: 'Each range needs from ≤ to and step > 0.' };
+    const vals = [];
+    for (let v = from; v <= to + 1e-9; v += step) vals.push(Math.round(v * 100) / 100);
+    grids[row.dataset.sw] = vals;
+    combos *= vals.length;
+  }
+  if (combos > 1000) return { err: `${combos.toLocaleString()} combinations is too many — max 1,000. Widen the steps.` };
+  return { grids, combos };
+}
+async function runSweep() {
+  const g = sweepGrids();
+  const warn = $('#swWarn'); warn.innerHTML = '';
+  if (g.err) { warn.innerHTML = `<div class="errline">✕ &nbsp;${g.err}</div>`; return; }
+  const stratId = $('#swStratSel').value;
+  if (!BT.strategy(stratId).params.length) { warn.innerHTML = '<div class="errline">✕ &nbsp;Nothing to sweep for Buy &amp; Hold.</div>'; return; }
+  const opts = { feePct: +$('#feeIn').value, slipPct: +$('#slipIn').value, capital: +$('#capIn').value, barsPerYear: BT.barsPerYear(BT.TF_SECONDS[S.meta.tf]) };
+  $('#swRunBtn').style.display = 'none'; $('#swCancelBtn').style.display = ''; $('#swProg').style.display = '';
+  $('#swStatus').textContent = `0 / ${g.combos} combinations…`;
+  S.sweepWorker = makeWorker();
+  const t0 = performance.now();
+  let cancelled = false;
+  $('#swCancelBtn').onclick = () => { cancelled = true; S.sweepWorker.terminate(); S.sweepWorker = null; endSweep(); $('#swStatus').textContent = 'Sweep cancelled — nothing was saved. Adjust ranges and run again.'; };
+  function endSweep() { $('#swRunBtn').style.display = ''; $('#swCancelBtn').style.display = 'none'; $('#swProg').style.display = 'none'; }
+  try {
+    const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: S.bars, stratId, grids: g.grids, opts },
+      (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `${done} / ${total} combinations…`; });
+    if (cancelled) return;
+    endSweep();
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    $('#swStatus').textContent = `${res.results.length} valid results in ${secs}s — ranked by Sharpe. Degenerate combos (fast ≥ slow) were skipped.`;
+    $('#swResults').innerHTML = `
+      <div class="card scrollx" style="padding:6px 10px">
+      <table><thead><tr><th>Params</th><th>Return</th><th>Sharpe</th><th>Max DD</th><th>Trades</th></tr></thead>
+      <tbody>${res.results.slice(0, 50).map(r => `
+        <tr class="tap" data-p='${JSON.stringify(r.params)}'>
+          <td>${Object.entries(r.params).map(([k, v]) => k + ' ' + v).join(' · ')}</td>
+          <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}</td>
+          <td><b style="color:var(--ink)">${fmtNum(r.m.sharpe)}</b></td>
+          <td class="neg">${fmtPctU(r.m.maxDrawdown)}</td><td>${r.m.trades}</td></tr>`).join('')}</tbody></table>
+      </div>
+      <p class="hint">Tap a row to load its parameters into the Strategy tab. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting).</p>`;
+    $$('#swResults tr.tap').forEach(tr => tr.onclick = () => {
+      const p = JSON.parse(tr.dataset.p);
+      $('#stratSel').value = stratId; renderParams();
+      for (const [k, v] of Object.entries(p)) { const inp = $(`#paramBox [data-param="${k}"]`); if (inp) inp.value = v; }
+      validateParams(); nav('strat');
+      $('#runStatus').innerHTML = '<div class="okline">✓ &nbsp;Sweep parameters loaded — hit Run backtest.</div>';
+    });
+  } catch (e) {
+    if (!cancelled) { endSweep(); warn.innerHTML = `<div class="errline">✕ &nbsp;Sweep failed: ${e.message}</div>`; }
+  }
+}
+
+/* ---------------- settings: self-test [DR-37], proxy, data mgmt ---------------- */
+async function selfTest() {
+  const out = $('#selfTestOut');
+  const line = (icon, cls, txt) => `<div class="${cls}">${icon} &nbsp;${txt}</div>`;
+  out.innerHTML = line('<span class="spin"></span>', 'hint" style="margin-top:10px', 'Testing…');
+  const results = [];
+  const ccxtOK = await loadCcxt(15000);
+  results.push(ccxtOK ? line('✓', 'okline', 'ccxt library loaded from CDN') : line('✕', 'errline', 'ccxt CDN unreachable (offline or blocked) — direct REST will be used instead'));
+  let ccxtFetch = false, restFetch = false, restCause = '';
+  if (ccxtOK) {
+    try { const ex = new ccxt.binance(); const d = await ex.fetchOHLCV('BTC/USDT', '1h', undefined, 5); ccxtFetch = Array.isArray(d) && d.length > 0; } catch (e) { ccxtFetch = false; }
+    results.push(ccxtFetch ? line('✓', 'okline', 'Binance reachable via ccxt — live data will work') : line('⚠', 'warnline', 'ccxt loaded but Binance fetch failed (likely CORS) — trying direct REST'));
+  }
+  try {
+    const proxy = await getProxy();
+    const r = await fetch(proxy + 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=2');
+    restFetch = r.ok && (await r.json()).length > 0;
+  } catch (e) { restCause = classifyFetchError(e, null); }
+  results.push(restFetch ? line('✓', 'okline', 'Binance reachable via direct REST' + ((await getProxy()) ? ' (through your proxy)' : '')) :
+    line('✕', 'errline', 'Direct REST fetch failed (' + (restCause || 'blocked') + '). ' + (((await getProxy())) ? 'Your proxy did not help — check its URL.' : 'Set a proxy URL above, or use demo data.')));
+  const verdict = (ccxtFetch || restFetch)
+    ? line('✓', 'okline', '<b>Live Binance data works on this device.</b>')
+    : line('⚠', 'warnline', '<b>No live route right now.</b> Demo datasets work fully offline; a proxy may unlock live data.');
+  out.innerHTML = results.join('') + verdict;
+  await DB.put('settings', 'selfTest', { ccxtOK, ccxtFetch, restFetch, at: Date.now() });  /* [DR-12 check] */
+}
+
+/* ---------------- boot ---------------- */
+async function boot() {
+  fillStratSelect($('#stratSel'));
+  fillStratSelect($('#swStratSel'));
+  $('#stratSel').value = 'smax';   // trend-following default beats a do-nothing first run
+  $('#swStratSel').value = 'smax';
+  renderParams(); renderSweepBox();
+
+  $('#stratSel').onchange = renderParams;
+  $('#swStratSel').onchange = renderSweepBox;
+  $('#paramBox').addEventListener('input', validateParams);
+  $('#feeIn').addEventListener('input', validateParams);
+  $('#capIn').addEventListener('input', validateParams);
+  $('#runBtn').onclick = runBacktest;
+  $('#swRunBtn').onclick = runSweep;
+  $('#fetchBtn').onclick = doFetch;
+  $('#tfSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    $$('#tfSeg button').forEach(x => x.classList.remove('on')); b.classList.add('on');
+    S.tf = b.dataset.tf;
+  });
+  $('#symSel').onchange = () => {
+    const custom = $('#symSel').value === '__custom';
+    $('#symCustom').style.display = custom ? '' : 'none';
+    $('#symHint').textContent = custom ? 'Format: BASE/QUOTE — btcusdt, BTC-USDT and btc/usdt all work.' : '';
+    if (custom) $('#symCustom').focus();
+  };
+  $('#selfTestBtn').onclick = selfTest;
+  $('#proxySave').onclick = async () => {
+    let v = $('#proxyIn').value.trim();
+    if (v && !/^https?:\/\//.test(v)) { $('#proxyIn').value = v = 'https://' + v; }
+    await DB.put('settings', 'proxy', v);
+    $('#proxySave').textContent = v ? 'Saved ✓' : 'Cleared ✓';
+    setTimeout(() => $('#proxySave').textContent = 'Save proxy', 1500);
+  };
+  $('#reseedBtn').onclick = async () => { await seedDemos(true); renderDsList(); $('#reseedBtn').textContent = 'Restored ✓'; setTimeout(() => $('#reseedBtn').textContent = 'Restore demo datasets', 1500); };
+  $('#wipeBtn').onclick = async () => {
+    if (!confirm('Delete ALL datasets on this device? Demo data can be restored; fetched data would need re-fetching.')) return;
+    await DB.clear('datasets');
+    S.selectedKey = null; S.bars = null; $('#dsBadge').textContent = 'no dataset';
+    await DB.del('settings', 'selectedKey');
+    renderDsList(); refreshDsBanners();
+  };
+
+  // first run + persistence
+  const seen = await DB.get('settings', 'seen');
+  if (!seen) { $('#firstRun').style.display = ''; await DB.put('settings', 'seen', 1); }
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});  /* [DR-36 eviction mitigation] */
+  await seedDemos(false);
+  $('#proxyIn').value = await getProxy();
+
+  const savedKey = await DB.get('settings', 'selectedKey');
+  if (savedKey) await selectDataset(savedKey);
+  if (!S.selectedKey) await selectDataset('demo|BTC/USDT|1d');
+  await renderDsList();
+  refreshDsBanners();
+
+  // optional offline shell [DR-36]
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').then(
+      () => $('#swState').textContent = 'Offline shell: active ✓',
+      () => $('#swState').textContent = 'Offline shell: sw.js not found beside this file (app still works; it just needs network to reload).');
+  } else if (location.protocol === 'file:') {
+    $('#swState').textContent = 'Opened as a local file — everything works; host it to enable Add to Home Screen.';
+  }
+}
+boot();
+
+</script>
+</body>
+</html>
