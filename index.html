@@ -2008,7 +2008,8 @@ async function runSweep() {
       </div>` : ''}
       <p class="hint">${useOOS
         ? 'In-sample columns are the fit; <b>OOS columns are the honest test</b> — parameters that shine in-sample but collapse out-of-sample are overfit. Tap a row to load its parameters.'
-        : 'Tap a row to load its parameters. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting). Turn on the out-of-sample check for an honest test.'}</p>`;
+        : 'Tap a row to load its parameters. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting). Turn on the out-of-sample check for an honest test.'}
+      All rows and the B&amp;H line share ONE evaluation window starting after the grid’s longest warm-up — a single backtest of the same parameters uses its own (often shorter) warm-up, so its numbers can differ slightly from the row. [DR-57]</p>`;
       $('#swFilter').onclick = () => { filterOn = !filterOn; renderSwTable(); };
       wireSwRows();
       drawHeatmap(res, stratId, lbl);                    /* [DR-51] */
