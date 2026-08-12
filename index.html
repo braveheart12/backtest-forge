@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.5</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.6</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -307,7 +307,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.5</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.6</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -1080,7 +1080,8 @@ self.onmessage = function (e) {
       self.postMessage({ id: m.id, ok: true, kind: 'run',
         equity: Array.from(r.equity), bench: Array.from(bench), trades: r.trades,
         metrics: r.metrics, monthly, tear, warm,
-        benchTotal: bench[C.n - 1] / bench[warm] - 1 });                          /* [DR-57] */
+        benchTotal: bench[C.n - 1] / bench[warm] - 1,                             /* [DR-57] same window */
+        benchFull: C.c[C.n - 1] / C.c[0] - 1 });                                  /* [DR-58] incl. warm-up, for context */
     } else if (m.cmd === 'sweep') {
       const t0 = performance.now();
       const split = m.splitPct ? Math.floor(m.bars.length * m.splitPct) : m.bars.length;   /* [DR-42] */
@@ -1686,7 +1687,8 @@ function renderResults() {
       })()}</div>
     </div>
     <div class="tiles">
-      ${tile('Total return', fmtPct(m.totalReturn), m.totalReturn >= 0 ? 'pos' : 'neg', 'vs Buy&Hold ' + fmtPct(R.res.benchTotal) + ' (' + fmtPct(alpha) + ' alpha)')}
+      ${tile('Total return', fmtPct(m.totalReturn), m.totalReturn >= 0 ? 'pos' : 'neg',
+        'vs B&H same window ' + fmtPct(R.res.benchTotal) + ' (' + fmtPct(alpha) + ' alpha) · B&H incl. ' + R.res.warm + '-bar warm-up ' + fmtPct(R.res.benchFull) + ' — the strategy cannot trade the warm-up, so the first figure is the fair one')}
       ${tile('CAGR', fmtPct(m.cagr), m.cagr >= 0 ? 'pos' : 'neg', METRIC_HELP.cagr)}
       ${tile('Sharpe', fmtNum(m.sharpe), '', METRIC_HELP.sharpe)}
       ${tile('Max drawdown', fmtPctU(m.maxDrawdown), 'neg', m.maxDDBars + ' bars underwater · ' + METRIC_HELP.maxdd)}
