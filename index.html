@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.9</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.0</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -258,12 +258,14 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <div id="swBox"></div>
     <label class="f">Optimize for</label>
     <select id="swMetric">
-      <option value="sharpe" selected>Sharpe (risk-adjusted)</option>
+      <option value="ir" selected>Outperform B&amp;H — Information Ratio (recommended)</option>
+      <option value="sharpe">Sharpe (risk-adjusted)</option>
+      <option value="sortino">Sortino</option>
+      <option value="calmar">Calmar (return / drawdown)</option>
       <option value="totalReturn">Total return</option>
       <option value="cagr">CAGR</option>
-      <option value="calmar">Calmar (return / drawdown)</option>
-      <option value="sortino">Sortino</option>
     </select>
+    <div class="hint">IR ranks by consistent excess return over Buy &amp; Hold — the direct objective if beating holding is the goal. [DR-62]</div>
     <label class="f">Validation</label>
     <select id="swVal">
       <option value="split" selected>70/30 split — fit early data, test late data</option>
@@ -316,7 +318,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.9</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -768,11 +770,27 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     const calmar = maxDD < 0 ? cagr / Math.abs(maxDD) : (cagr > 0 ? Infinity : 0);
 
+    // excess vs same-window close-basis B&H [DR-62]
+    let ir = 0, alphaTotal = 0, tExcess = 0;
+    if (C.c && n - start > 2) {
+      let mEx = 0, m2Ex = 0, kEx = 0;
+      for (let i = start + 1; i < n; i++) {
+        const ex = (equity[i] / equity[i - 1]) - (C.c[i] / C.c[i - 1]);
+        kEx++;
+        const d = ex - mEx; mEx += d / kEx; m2Ex += d * (ex - mEx);
+      }
+      const sdEx = kEx > 1 ? Math.sqrt(m2Ex / (kEx - 1)) : 0;
+      // sdEx below fp-noise floor => strategy ≡ benchmark; IR is 0, not noise/noise [DR-62]
+      ir = sdEx > 1e-9 ? (mEx / sdEx) * Math.sqrt(barsPerYear) : 0;
+      tExcess = sdEx > 1e-9 ? mEx / (sdEx / Math.sqrt(kEx)) : 0;
+      alphaTotal = totalReturn - (C.c[n - 1] / C.c[start] - 1);
+    }
     const closed = (trades || []).filter(t => !t.open);
     const all = trades || [];
     const wins = all.filter(t => t.ret > 0), losses = all.filter(t => t.ret <= 0);
     const grossW = wins.reduce((a, t) => a + t.ret, 0), grossL = Math.abs(losses.reduce((a, t) => a + t.ret, 0));
     return {
+      ir, alphaTotal, tExcess,
       totalReturn, cagr, annVol, sharpe, sortino,
       maxDrawdown: maxDD, maxDDBars: maxDur, calmar,
       exposure: (n - start) > 0 ? (posBars || 0) / (n - start) : 0,
@@ -783,6 +801,26 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       avgLoss: losses.length ? -grossL / losses.length : 0,
       bars: n, startBar: start,
     };
+  };
+
+  /* ---------- regime breakdown [DR-62] ---------- */
+  BT.regimeBreakdown = function (equity, C, warm) {
+    const n = C.n;
+    if (n < 260) return null;
+    const s200 = sma(C.c, 200);
+    const out = { bull: { bars: 0, eq: 1, bh: 1 }, chop: { bars: 0, eq: 1, bh: 1 }, bear: { bars: 0, eq: 1, bh: 1 } };
+    for (let i = Math.max(warm, 220) + 1; i < n; i++) {
+      const rising = isFinite(s200[i]) && isFinite(s200[i - 20]) && s200[i] > s200[i - 20];
+      const above = isFinite(s200[i]) && C.c[i] > s200[i];
+      const cls = (above && rising) ? 'bull' : (!above && !rising) ? 'bear' : 'chop';
+      out[cls].bars++;
+      out[cls].eq *= equity[i] / equity[i - 1];
+      out[cls].bh *= C.c[i] / C.c[i - 1];
+    }
+    const total = out.bull.bars + out.chop.bars + out.bear.bars;
+    if (!total) return null;
+    for (const k of ['bull', 'chop', 'bear']) out[k] = { share: out[k].bars / total, strat: out[k].eq - 1, bench: out[k].bh - 1 };
+    return out;
   };
 
   /* ---------- monthly returns table ---------- */
@@ -1125,9 +1163,10 @@ self.onmessage = function (e) {
       const bench = BT.benchmark(C, m.opts.capital, warm);                       /* [DR-57] same window as strategy */
       const monthly = BT.monthlyReturns(r.equity, C.ts, warm);
       const tear = BT.tearsheet(r.equity, C, m.opts.barsPerYear || 365, warm, r.trades, monthly);  /* [DR-50] */
+      const regime = BT.regimeBreakdown(r.equity, C, warm);                      /* [DR-62] */
       self.postMessage({ id: m.id, ok: true, kind: 'run',
         equity: Array.from(r.equity), bench: Array.from(bench), trades: r.trades,
-        metrics: r.metrics, monthly, tear, warm,
+        metrics: r.metrics, monthly, tear, regime, warm,
         benchTotal: bench[C.n - 1] / bench[warm] - 1,                             /* [DR-57] same window */
         benchFull: C.c[C.n - 1] / C.c[0] - 1 });                                  /* [DR-58] incl. warm-up, for context */
     } else if (m.cmd === 'sweep') {
@@ -1150,8 +1189,9 @@ self.onmessage = function (e) {
         const Co = BT.colsFromBars(m.bars.slice(split));
         benchOOS = Co.c[Co.n - 1] / Co.c[0] - 1;
       }
-      /* selection-bias stats over ALL trials [DR-46] */
-      const srs = sw.results.map(r => r.m.sharpe).filter(Number.isFinite);
+      /* selection-bias stats over ALL trials, on the OPTIMIZED objective [DR-46, DR-62] */
+      const skey = m.opts.sortKey || 'sharpe';
+      const srs = sw.results.map(r => r.m[skey]).filter(Number.isFinite);
       const mean = srs.length ? srs.reduce((a, b) => a + b, 0) / srs.length : 0;
       const varSR = srs.length > 1 ? srs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / srs.length : 0;
       const trialStats = { n: srs.length, maxSharpe: srs.length ? Math.max.apply(null, srs) : 0, varSharpe: varSR };
@@ -1804,6 +1844,17 @@ function renderResults() {
         <tr><td class="neg">${fmtPctU(d.depth)}</td><td>${fmtDate(R.ts[d.startIdx])}</td><td>${fmtDate(R.ts[d.troughIdx])}</td>
         <td>${d.recovered ? fmtDate(R.ts[d.endIdx]) : '<span class="neg">not yet</span>'}</td><td>${d.endIdx - d.startIdx}</td></tr>`).join('')}</tbody></table>
     </div>
+    ${R.res.regime ? `
+    <h2>Regime breakdown <span style="text-transform:none;letter-spacing:0">(by 200-bar trend — where does the edge live?)</span></h2>
+    <div class="card scrollx" style="padding:6px 10px">
+      <table><thead><tr><th>Regime</th><th>Share</th><th>Strategy</th><th>B&amp;H</th><th>Edge</th></tr></thead>
+      <tbody>${['bull', 'chop', 'bear'].map(k => { const g = R.res.regime[k]; const edge = g.strat - g.bench; return `
+        <tr><td>${{ bull: '🟢 Bull', chop: '🟡 Chop', bear: '🔴 Bear' }[k]}</td><td>${fmtPctU(g.share, 0)}</td>
+        <td class="${g.strat >= 0 ? 'pos' : 'neg'}">${fmtPct(g.strat)}</td>
+        <td class="${g.bench >= 0 ? 'pos' : 'neg'}">${fmtPct(g.bench)}</td>
+        <td class="${edge >= 0 ? 'pos' : 'neg'}"><b>${fmtPct(edge)}</b></td></tr>`; }).join('')}</tbody></table>
+      <p class="hint">Compounded over that regime’s bars. A durable edge usually lives in bear/chop protection; expecting it to also beat a raging bull is expecting too much. [DR-62]</p>
+    </div>` : ''}
     <h2>Monthly returns %</h2>
     <div id="chMo"></div>
     <h2>Trades (${R.res.trades.length}${R.res.trades.length > 100 ? ', last 100 shown' : ''})</h2>
@@ -1963,7 +2014,7 @@ async function runSweep() {
   let cancelled = false;
   $('#swCancelBtn').onclick = () => { cancelled = true; S.sweepWorker.terminate(); S.sweepWorker = null; endSweep(); $('#swStatus').textContent = 'Sweep cancelled — nothing was saved. Adjust ranges and run again.'; };
   function endSweep() { $('#swRunBtn').style.display = ''; $('#swCancelBtn').style.display = 'none'; $('#swProg').style.display = 'none'; }
-  const METRIC_LABEL = { sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
+  const METRIC_LABEL = { ir: 'IR vs B&H', sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
   const fmtM = (key, v) => v == null ? '—' : (key === 'totalReturn' || key === 'cagr') ? fmtPct(v) : fmtNum(v);
   try {
     if (valMode === 'wfa') {                                                     /* [DR-45] */
@@ -2040,7 +2091,7 @@ async function runSweep() {
       <div class="card" id="swBench" style="padding:12px 14px">
         <b>Buy &amp; Hold same window${useOOS ? 's' : ''}:</b>
         <span class="${res.benchIS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchIS)}</span> in-sample${useOOS ? ` · <span class="${res.benchOOS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchOOS)}</span> out-of-sample` : ''}.
-        <div class="hint">${nIS} of ${res.results.length} combos beat it in-sample${useOOS ? `; <b>${nBoth} beat it in both windows</b> — those are the only ones worth a second look` : ''}. ✓ marks a return that beats B&amp;H (note: strategy returns pay fees, B&amp;H here doesn’t — so ✓ is the harder test).</div>
+        <div class="hint">${nIS} of ${res.results.length} combos beat it in-sample${useOOS ? `; <b>${nBoth} beat it in both windows</b> — those are the only ones worth a second look` : ''}. ✓ = beat B&amp;H; <b>✓✓ = beat it with t ≥ 1.65</b> — statistically meaningful outperformance, not one lucky window (strategy returns pay fees, B&amp;H doesn’t — the harder test). [DR-62]</div>
         ${(() => {                                                               /* [DR-46] */
           const ts = res.trialStats || {};
           const expMax = BT.expectedMaxSharpe(ts.n, ts.varSharpe);
@@ -2049,7 +2100,7 @@ async function runSweep() {
           const v = top > 1.25 * expMax ? '<b class="pos">clears the luck bar</b>'
                   : top >= 0.75 * expMax ? '<b style="color:var(--warn)">indistinguishable from selection luck</b>'
                   : '<b class="neg">below what luck alone would produce</b>';
-          return `<div class="hint" style="margin-top:6px">Selection-bias check: testing ${ts.n.toLocaleString()} combos, pure luck would be expected to yield a best in-sample Sharpe of ~${expMax.toFixed(2)}. Your best is ${top.toFixed(2)} — ${v}.</div>`;
+          return `<div class="hint" style="margin-top:6px">Selection-bias check: testing ${ts.n.toLocaleString()} combos, pure luck would be expected to yield a best in-sample ${lbl} of ~${expMax.toFixed(2)}. Your best is ${top.toFixed(2)} — ${v}. [DR-46, DR-62]</div>`;
         })()}
         <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button" style="margin-top:8px">${filterOn ? `Showing only B&amp;H beaters (${useOOS ? nBoth : nIS})` : 'Show only combos that beat Buy & Hold'}</button>
       </div>
@@ -2062,7 +2113,7 @@ async function runSweep() {
           <td><b style="color:var(--ink)">${fmtM(sortKey, r.m[sortKey])}</b></td>
           <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}${beatsIS(r) ? ' ✓' : ''}</td>
           ${useOOS ? `<td>${fmtM(sortKey, r.oos && r.oos[sortKey])}</td>
-          <td class="${r.oos && r.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${r.oos ? fmtPct(r.oos.totalReturn) + (beatsOOS(r) ? ' ✓' : '') : '—'}</td>`
+          <td class="${r.oos && r.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${r.oos ? fmtPct(r.oos.totalReturn) + (beatsOOS(r) ? (r.oos.tExcess >= 1.65 ? ' ✓✓' : ' ✓') : '') : '—'}</td>`
           : `<td class="neg">${fmtPctU(r.m.maxDrawdown)}</td>`}
           <td>${r.m.trades}</td></tr>`).join('')}</tbody></table>
       </div>`}
