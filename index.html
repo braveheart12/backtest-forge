@@ -114,7 +114,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v1.4</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v1.5</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -251,7 +251,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v1.4</b> · long-only · data via ccxt/Binance · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v1.5</b> · long-only · data via ccxt/Binance · not investment advice</p>
 </section>
 </main>
 
@@ -1431,6 +1431,24 @@ async function runSweep() {
       const wins = wf.windows.filter(Boolean);
       const beatCount = wins.filter(w => w.oos.totalReturn > w.bench).length;
       const stitchWins = wf.stitched > wf.stitchedBench;
+      /* consensus pick: modal type + per-param medians within it [DR-48] */
+      let consensus = null, spreadNote = '';
+      if (wins.length) {
+        const counts = {};
+        wins.forEach(w => { const t = w.params.type; if (t) counts[t] = (counts[t] || 0) + 1; });
+        const modal = Object.keys(counts).length ? Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0] : null;
+        const pool = modal ? wins.filter(w => w.params.type === modal) : wins;
+        const med = (arr) => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor((s.length - 1) / 2)]; };
+        consensus = modal ? { type: modal } : {};
+        const spreads = [];
+        for (const k of Object.keys(pool[0].params)) {
+          if (k === 'type') continue;
+          const vals = pool.map(w => w.params[k]);
+          consensus[k] = med(vals);
+          spreads.push(`${k} ${Math.min(...vals)}–${Math.max(...vals)}`);
+        }
+        spreadNote = (modal ? `${modal} won ${counts[modal]} of ${wins.length} windows` : 'no MA type dimension') + (spreads.length ? `; winner ranges: ${spreads.join(', ')}` : '');
+      }
       $('#swStatus').textContent = `Walk-forward done in ${secs}s — grid re-optimized ${wf.nWin}× on expanding history, each winner tested on the next unseen window.`;
       $('#swResults').innerHTML = `
         <div class="card" id="swBench" style="padding:12px 14px">
@@ -1439,7 +1457,9 @@ async function runSweep() {
           <b>${stitchWins ? 'the strategy wins' : 'holding wins'}</b>.
           <div class="hint">${beatCount} of ${wins.length} windows beat B&amp;H. ${wf.distinctParams === 1
             ? 'The SAME parameters won every window — a strong stability signal.'
-            : wf.distinctParams + ' different parameter sets won across ' + wins.length + ' windows — ' + (wf.distinctParams >= wins.length ? 'no stability: each era wanted different settings (a classic overfitting tell).' : 'moderate stability.')}</div>
+            : wf.distinctParams + ' parameter sets won across ' + wins.length + ' windows (' + spreadNote + ') — tight ranges = a stable plateau; scattered ranges = an overfitting tell.'}</div>
+          ${consensus ? `<button class="btn ghost" id="swCons" data-p='${JSON.stringify(consensus)}' style="margin-top:10px">Load consensus pick: ${Object.entries(consensus).map(([k, v]) => k === 'type' ? v : v).join(' / ')} (plateau center)</button>
+          <div class="hint">The consensus pick is the modal MA type + median periods across window winners — the center of the plateau, which generalizes better than any single window’s exact cell. [DR-48]</div>` : ''}
         </div>
         <div class="card scrollx" style="padding:6px 10px">
         <table><thead><tr><th>Window</th><th>Winner (re-fit)</th><th>OOS Ret</th><th>B&amp;H</th></tr></thead>
@@ -1451,13 +1471,15 @@ async function runSweep() {
             <td class="${w.bench >= 0 ? 'pos' : 'neg'}">${fmtPct(w.bench)}</td></tr>` : `<tr><td colspan="4">window ${i + 1}: no valid combos</td></tr>`).join('')}</tbody></table>
         </div>
         <p class="hint">✓ = beat Buy &amp; Hold in that unseen window. Tap a row to load that window’s winning parameters. Judge the strategy on the stitched result and the stability note — not on any single window.</p>`;
-      $$('#swResults tr.tap').forEach(tr => tr.onclick = () => {
-        const p = JSON.parse(tr.dataset.p);
+      const loadWfParams = (p, label) => {
         $('#stratSel').value = stratId; renderParams();
         for (const [k, v] of Object.entries(p)) { const inp = $(`#paramBox [data-param="${k}"]`); if (inp) inp.value = v; }
         validateParams(); nav('strat');
-        $('#runStatus').innerHTML = '<div class="okline">✓ &nbsp;Walk-forward winner loaded — hit Run backtest.</div>';
-      });
+        $('#runStatus').innerHTML = `<div class="okline">✓ &nbsp;${label} loaded — hit Run backtest.</div>`;
+      };
+      $$('#swResults tr.tap').forEach(tr => tr.onclick = () => loadWfParams(JSON.parse(tr.dataset.p), 'Walk-forward winner'));
+      const cons = $('#swCons');
+      if (cons) cons.onclick = () => loadWfParams(JSON.parse(cons.dataset.p), 'Consensus pick (plateau center)');
       return;
     }
     const res = await workerCall(S.sweepWorker, { cmd: 'sweep', bars: S.bars, stratId, grids: g.grids, opts, splitPct: useOOS ? 0.7 : 0 },
