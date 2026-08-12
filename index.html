@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.7</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.9</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -354,6 +354,31 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <div class="hint" id="swStatus"></div>
   </div>
   <div id="swResults"></div>
+
+  <h2>Cross-section lab — which family wins across the whole market?</h2>
+  <div class="card">
+    <div class="hint">Runs the fixed protocol grid for every MA family on the FULL Binance universe — selection-free at both layers (median-of-grid per asset, no best-cell picking) and judged by a correlation-robust panel-t (per-day cross-sectional mean excess vs each asset's own B&amp;H, so BTC-beta cannot inflate significance). One-time fetch is cached for 7 days. [DR-86]</div>
+    <div class="row">
+      <div style="flex:1"><label class="f">Min 24h vol ($M)</label><input type="number" id="xsMinVol" value="5" min="1" step="1" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f">Max symbols</label><input type="number" id="xsMaxN" value="150" min="10" max="500" step="10" inputmode="numeric"></div>
+    </div>
+    <label class="f"><input type="checkbox" id="xsDead" checked style="width:auto;min-height:0;margin-right:6px">Include cached graveyard (delisted coins) when available [DR-87]</label>
+    <button class="btn" id="xsRunBtn">Fetch universe &amp; run panel</button>
+    <button class="btn danger" id="xsCancelBtn" style="display:none">Cancel</button>
+    <div class="hint" id="xsStatus"></div>
+    <div style="border-top:1px solid var(--grid);margin-top:14px;padding-top:10px">
+      <b style="font-size:13px">Survivorship patch — the graveyard [DR-87]</b>
+      <div class="hint">Delisted pairs vanish from the live API but their full history survives in Binance's public archive (data.binance.vision, monthly ZIPs — decompressed right here in the browser). Backfilling them makes the panel survivorship-corrected: B&amp;H on dead coins usually ended −90%+, which is exactly where gates and exits earn their keep. One-time, resumable, WiFi recommended. Needs ≥ ~1,010 daily bars per coin to enter the panel (the grid's warm-up discipline).</div>
+      <div class="row">
+        <div style="flex:1"><label class="f">Max dead coins per run</label><input type="number" id="gyMax" value="60" min="5" max="400" step="5" inputmode="numeric"></div>
+        <div style="flex:1"></div>
+      </div>
+      <button class="btn ghost" id="gyBtn">Probe archive &amp; backfill graveyard</button>
+      <button class="btn danger" id="gyCancelBtn" style="display:none">Stop backfill</button>
+      <div class="hint" id="gyStatus"></div>
+    </div>
+  </div>
+  <div id="xsOut"></div>
 </section>
 
 <!-- ================= RADAR [DR-75] ================= -->
@@ -453,7 +478,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.7</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.9</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -462,7 +487,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
-  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.7M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.9M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
@@ -1968,6 +1993,143 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return { equity, bench, metrics, warm, turnover, rebalances, wLast: Array.from(w) };
   };
 
+  /* ---------- cross-section family panel [DR-86] ---------- */
+  // Selection-free at BOTH layers: per asset, each family is scored by the MEDIAN of the
+  // protocol grid (no best-cell picking) and by the EQUAL-WEIGHTED daily excess of all its
+  // grid combos (a "family portfolio"). Across assets, the panel series (per-calendar-day
+  // cross-sectional mean excess) gives a correlation-robust t — correlated alts simply make
+  // the daily mean noisier, so BTC-beta cannot inflate significance.
+  BT.panelInit = function (cfg) {
+    return {
+      cfg: Object.assign({ families: MA_TYPES, fast: [10, 20, 30, 40, 50], slow: [40, 60, 90, 120, 160, 200],
+                           feePct: 0.1, maxBars: 1600, minAssetsPerDay: 8 }, cfg),
+      acc: new Map(),                                        // family -> Map(dayKey -> [sumExcess, count])
+      perAsset: [], skipped: [],
+    };
+  };
+  BT.panelAddAsset = function (st, sym, barsIn, tier) {
+    const cfg = st.cfg;
+    const bars = barsIn.length > cfg.maxBars ? barsIn.slice(-cfg.maxBars) : barsIn;
+    const C = colsFromBars(bars);
+    const strat = BT.strategy('macross');
+    let warm = 0;
+    for (const fam of cfg.families) warm = Math.max(warm, strat.warmup({ type: fam, fast: 10, slow: Math.max(...cfg.slow) }));
+    if (C.n - warm < 400) { st.skipped.push(sym + ' (' + (C.n - warm) + ' usable bars)'); return { sym, skipped: true }; }
+    const bhTot = C.c[C.n - 1] / C.c[warm] - 1;
+    const entry = { sym, tier, bhTot, fams: {} };
+    for (const fam of cfg.families) {
+      const edges = [];
+      const exDay = new Float64Array(C.n);
+      let nCombo = 0;
+      for (const f of cfg.fast) for (const s of cfg.slow) {
+        if (f >= s) continue;
+        const sig = strat.signals(C, { type: fam, fast: f, slow: s });
+        const r = BT.run(C, sig, { feePct: cfg.feePct, capital: 10000, barsPerYear: 365, warmup: warm });
+        edges.push(r.metrics.totalReturn - bhTot);
+        for (let i = warm + 1; i < C.n; i++) exDay[i] += (r.equity[i] / r.equity[i - 1] - 1) - (C.c[i] / C.c[i - 1] - 1);
+        nCombo++;
+      }
+      edges.sort((a, b) => a - b);
+      entry.fams[fam] = { medianEdge: edges[Math.floor((edges.length - 1) / 2)] };
+      let m = st.acc.get(fam);
+      if (!m) { m = new Map(); st.acc.set(fam, m); }
+      for (let i = warm + 1; i < C.n; i++) {
+        const key = Math.floor(C.ts[i] / 86400000);
+        const e = m.get(key) || [0, 0];
+        e[0] += exDay[i] / nCombo; e[1]++;
+        m.set(key, e);
+      }
+    }
+    st.perAsset.push(entry);
+    return { sym, ok: true };
+  };
+  BT.panelFinish = function (st) {
+    const cfg = st.cfg;
+    if (!st.perAsset.length) return null;
+    // shared day grid: days with enough cross-section, identical across families
+    const anyFam = st.acc.get(cfg.families[0]);
+    const dayKeys = [...anyFam.keys()].filter(k => anyFam.get(k)[1] >= cfg.minAssetsPerDay).sort((a, b) => a - b);
+    const seriesM = [];                                      // family × day matrix for joint SPA
+    const rows = [];
+    for (const fam of cfg.families) {
+      const m = st.acc.get(fam);
+      const series = new Float64Array(dayKeys.length);
+      dayKeys.forEach((k, i) => { const e = m.get(k); series[i] = e ? e[0] / e[1] : 0; });
+      seriesM.push(series);
+      let s = 0, s2 = 0;
+      for (const v of series) { s += v; s2 += v * v; }
+      const n = series.length, mu = s / n, sd = Math.sqrt(Math.max(0, s2 / n - mu * mu));
+      const t = sd > 1e-12 ? mu / (sd / Math.sqrt(n)) : 0;
+      const solo = BT.spaTest([series], new Float64Array(n), 200, 11);           // m=1 SPA = bootstrap t-test
+      const medians = st.perAsset.filter(a => a.fams[fam]).map(a => a.fams[fam].medianEdge);
+      medians.sort((a, b) => a - b);
+      const tiers = {};
+      for (const a of st.perAsset) {
+        if (!a.fams[fam]) continue;
+        (tiers[a.tier] = tiers[a.tier] || []).push(a.fams[fam].medianEdge);
+      }
+      const tierMed = {};
+      for (const [tk, arr] of Object.entries(tiers)) { arr.sort((x, y) => x - y); tierMed[tk] = { median: arr[Math.floor((arr.length - 1) / 2)], n: arr.length, pctPos: arr.filter(x => x > 0).length / arr.length }; }
+      rows.push({ family: fam, nAssets: medians.length,
+                  medianEdge: medians[Math.floor((medians.length - 1) / 2)],
+                  pctPos: medians.filter(x => x > 0).length / medians.length,
+                  panelT: t, pBoot: solo ? solo.p : null, tierMed, annEx: mu * 365 });
+    }
+    rows.sort((a, b) => b.panelT - a.panelT);
+    const joint = BT.spaTest(seriesM, new Float64Array(dayKeys.length), 200, 13);   // best family vs zero after searching all
+    const deadBH = st.perAsset.filter(a => a.tier === 'dead').map(a => a.bhTot).sort((a, b) => a - b);
+    return { rows, nAssets: st.perAsset.length, nDays: dayKeys.length, skipped: st.skipped, joint,
+             deadStats: deadBH.length ? { n: deadBH.length, medianBH: deadBH[Math.floor((deadBH.length - 1) / 2)] } : null };
+  };
+
+  /* ---------- Binance Vision ZIP kline parser [DR-87] ---------- */
+  // Parses a *-1d-*.zip from data.binance.vision entirely in-browser (or node ≥18):
+  // central directory walk + native DecompressionStream('deflate-raw'). Handles the
+  // 2025+ microsecond-timestamp files and optional header rows.
+  BT.parseKlineZip = async function (buf) {
+    const u8 = new Uint8Array(buf);
+    const dv = new DataView(buf instanceof ArrayBuffer ? buf : u8.buffer);
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65558); i--) {
+      if (u8[i] === 0x50 && u8[i + 1] === 0x4b && u8[i + 2] === 0x05 && u8[i + 3] === 0x06) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('not a zip file');
+    const cdOff = dv.getUint32(eocd + 16, true);
+    const nEntries = dv.getUint16(eocd + 10, true);
+    let p = cdOff;
+    const rows = [];
+    for (let e = 0; e < nEntries; e++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('bad central directory');
+      const method = dv.getUint16(p + 10, true);
+      const compSize = dv.getUint32(p + 20, true);
+      const nameLen = dv.getUint16(p + 28, true);
+      const extraLen = dv.getUint16(p + 30, true);
+      const cmtLen = dv.getUint16(p + 32, true);
+      const lho = dv.getUint32(p + 42, true);
+      const lNameLen = dv.getUint16(lho + 26, true);
+      const lExtraLen = dv.getUint16(lho + 28, true);
+      const dataStart = lho + 30 + lNameLen + lExtraLen;
+      const comp = u8.subarray(dataStart, dataStart + compSize);
+      let text;
+      if (method === 0) text = new TextDecoder().decode(comp);
+      else if (method === 8) {
+        const stream = new Blob([comp]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        text = await new Response(stream).text();
+      } else throw new Error('unsupported zip method ' + method);
+      for (const line of text.split('\n')) {
+        const c = line.split(',');
+        if (c.length < 6) continue;
+        let t = +c[0];
+        if (!Number.isFinite(t)) continue;                   // header row
+        if (t > 1e14) t = Math.floor(t / 1000);              // µs → ms (2025+ vision files)
+        rows.push([t, +c[1], +c[2], +c[3], +c[4], +c[5]]);
+      }
+      p += 46 + nameLen + extraLen + cmtLen;
+    }
+    rows.sort((a, b) => a[0] - b[0]);
+    return rows;
+  };
+
   /* ---------- transfer test [DR-84] ---------- */
   // Does a FROZEN config (fitted elsewhere — e.g. on BTC/ETH) actually work on THIS
   // symbol? Since nothing was fitted here, the whole history is out-of-sample by
@@ -2110,8 +2272,13 @@ const DB = (() => {
   function open() {
     if (dbp) return dbp;
     dbp = new Promise((res, rej) => {
-      const rq = indexedDB.open('btforge', 1);
-      rq.onupgradeneeded = () => { rq.result.createObjectStore('datasets'); rq.result.createObjectStore('settings'); };
+      const rq = indexedDB.open('btforge', 2);                                   /* v2: + panel store [DR-86] */
+      rq.onupgradeneeded = () => {
+        const d = rq.result;
+        if (!d.objectStoreNames.contains('datasets')) d.createObjectStore('datasets');
+        if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings');
+        if (!d.objectStoreNames.contains('panel')) d.createObjectStore('panel');
+      };
       rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
     });
     return dbp;
@@ -2224,6 +2391,16 @@ self.onmessage = function (e) {
         bench = Array.from(r.bench); warm = r.warm;
       }
       self.postMessage({ id: m.id, ok: true, kind: 'folio', rows, equities, bench, warm, ts: aligned.ts, syms: aligned.syms });
+    } else if (m.cmd === 'panelStart') {                  /* [DR-86] cross-section panel */
+      self._panel = BT.panelInit(m.cfg || {});
+      self.postMessage({ id: m.id, ok: true, kind: 'panelStart' });
+    } else if (m.cmd === 'panelAsset') {
+      const r = BT.panelAddAsset(self._panel, m.sym, m.bars, m.tier);
+      self.postMessage({ id: m.id, ok: true, kind: 'panelAsset', r });
+    } else if (m.cmd === 'panelFinish') {
+      const out = BT.panelFinish(self._panel);
+      self._panel = null;
+      self.postMessage({ id: m.id, ok: true, kind: 'panelFinish', out });
     } else if (m.cmd === 'lac') {                         /* [DR-79] lookahead certification */
       const r = BT.lookaheadCheck(m.bars, m.stratId, m.params, m.filters, 20);
       self.postMessage({ id: m.id, ok: true, kind: 'lac', r });
@@ -3929,6 +4106,170 @@ async function runFolio() {
   } finally { $('#foRunBtn').disabled = false; }
 }
 
+/* ---------------- cross-section lab [DR-86] ---------------- */
+let xsCancel = false;
+async function runPanelLab() {
+  const status = $('#xsStatus');
+  const minVol = (+$('#xsMinVol').value || 5) * 1e6, maxN = Math.min(500, +$('#xsMaxN').value || 150);
+  xsCancel = false;
+  $('#xsRunBtn').style.display = 'none'; $('#xsCancelBtn').style.display = '';
+  $('#xsCancelBtn').onclick = () => { xsCancel = true; };
+  const endLab = () => { $('#xsRunBtn').style.display = ''; $('#xsCancelBtn').style.display = 'none'; };
+  let worker = null;
+  try {
+    status.innerHTML = '<span class="spin"></span>&nbsp; Discovering the universe…';
+    const disc = await discoverUniverse('binance', minVol, maxN, userExclSet());
+    if (!disc || !disc.length) throw new Error('universe discovery returned nothing — lower the volume floor');
+    const tierOf = (i) => i < disc.length / 3 ? 'T1' : (i < 2 * disc.length / 3 ? 'T2' : 'T3');
+    worker = makeWorker();
+    await workerCall(worker, { cmd: 'panelStart', cfg: { feePct: +$('#feeIn').value || 0.1 } });
+    let done = 0, fetched = 0, cachedN = 0;
+    const failed = [];
+    for (let i = 0; i < disc.length; i++) {
+      if (xsCancel) break;
+      const sym = disc[i].sym;
+      status.innerHTML = `<span class="spin"></span>&nbsp; ${sym} — ${i + 1}/${disc.length} (${fetched} fetched · ${cachedN} cached)…`;
+      let bars = null;
+      const cached = await DB.get('panel', sym);
+      if (cached && cached.bars && !cached.delisted && Date.now() - (cached.fetchedAt || 0) < 7 * 864e5) { bars = cached.bars; cachedN++; }
+      else {
+        try {
+          const res = await fetchREST('binance', sym, '1d', 1600, null);
+          const cl = BT.cleanBars(res.bars);
+          bars = cl.bars;
+          await DB.put('panel', sym, { sym, bars, fetchedAt: Date.now() });
+          fetched++;
+        } catch (e) { failed.push(sym); continue; }
+      }
+      if (bars.length < 450) { failed.push(sym + ' (young)'); continue; }
+      await workerCall(worker, { cmd: 'panelAsset', sym, bars, tier: tierOf(i) });
+      done++;
+    }
+    let deadN = 0;
+    if ($('#xsDead').checked && !xsCancel) {                                     /* [DR-87] cached graveyard */
+      const keys = await DB.keys('panel');
+      for (const k of keys) {
+        if (xsCancel) break;
+        const rec = await DB.get('panel', k);
+        if (rec && rec.delisted && rec.bars && rec.bars.length >= 450) {
+          status.innerHTML = `<span class="spin"></span>&nbsp; graveyard: ${rec.sym}…`;
+          await workerCall(worker, { cmd: 'panelAsset', sym: rec.sym, bars: rec.bars, tier: 'dead' });
+          deadN++; done++;
+        }
+      }
+    }
+    if (!done) throw new Error('no usable assets');
+    status.innerHTML = '<span class="spin"></span>&nbsp; Computing panel statistics…';
+    const res = await workerCall(worker, { cmd: 'panelFinish' });
+    const out = res.out;
+    endLab();
+    status.textContent = `${out.nAssets} assets (${deadN} delisted) · ${out.nDays.toLocaleString()} panel days · ${failed.length + out.skipped.length} skipped${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
+    const fmtT = (x) => (x >= 0 ? '+' : '') + x.toFixed(2);
+    $('#xsOut').innerHTML = `
+      <div class="card" style="padding:12px 14px">
+        <b>Joint SPA across all ${out.rows.length} families:</b> p = <b>${out.joint ? (out.joint.p * 100).toFixed(1) + '%' : '—'}</b>
+        that even the best family's cross-market edge is search luck.
+        ${out.deadStats ? `<div class="hint" style="margin-top:6px"><b>Graveyard check:</b> median B&amp;H outcome on the ${out.deadStats.n} delisted coins was <b class="neg">${fmtPct(out.deadStats.medianBH)}</b> — the survivorship the survivor-only panel never shows. Family edges below INCLUDE these coins.</div>` : `<div class="hint" style="margin-top:6px"><b>Survivorship caveat:</b> this universe is today's survivors — absolute levels are inflated; trust the RELATIVE family ranking, and run the graveyard backfill for corrected numbers. [DR-86]</div>`}
+      </div>
+      <div class="card scrollx" style="padding:6px 10px">
+      <table><thead><tr><th>Family</th><th>Ann. excess</th><th>Median edge</th><th>%+ assets</th><th>Panel t</th><th>p</th><th>Tiers T1/T2/T3${out.deadStats ? '/dead' : ''}</th></tr></thead>
+      <tbody>${out.rows.map(r => `
+        <tr>
+          <td><b>${r.family}</b> <span class="note">×${r.nAssets}</span></td>
+          <td class="${r.annEx >= 0 ? 'pos' : 'neg'}">${fmtPct(r.annEx)}</td>
+          <td class="${r.medianEdge >= 0 ? 'pos' : 'neg'}">${fmtPct(r.medianEdge)}</td>
+          <td>${fmtPctU(r.pctPos, 0)}</td>
+          <td class="${r.panelT >= 1.65 ? 'pos' : ''}"><b>${fmtT(r.panelT)}</b></td>
+          <td>${r.pBoot != null ? (r.pBoot * 100).toFixed(0) + '%' : '—'}</td>
+          <td class="note">${['T1', 'T2', 'T3', 'dead'].filter(tk => r.tierMed[tk]).map(tk => fmtPct(r.tierMed[tk].median)).join(' / ')}</td></tr>`).join('')}</tbody></table>
+      </div>
+      <p class="hint">Selection-free panel: each family is its ENTIRE protocol grid equal-weighted (no cell picking), each asset judged vs its own B&amp;H, each day averaged across the cross-section — so correlated alts cannot inflate t (10 BTC clones give the same t as one). Panel t ≥ 1.65 with a low bootstrap p on the RELATIVE ranking is the strongest family evidence this app can produce. Ann. excess = annualized mean of the panel series (fees included, B&amp;H frictionless). Skipped: ${out.skipped.slice(0, 6).join(', ') || failed.slice(0, 6).join(', ') || 'none'}${(out.skipped.length + failed.length) > 6 ? '…' : ''}. [DR-86]</p>`;
+  } catch (e) {
+    endLab();
+    status.innerHTML = `<div class="errline">✕ &nbsp;${e.message || e}${(e && e.cause) ? ' (' + e.cause + ')' : ''}</div>`;
+  } finally { if (worker) worker.terminate(); }
+}
+
+/* ---------------- survivorship patch: graveyard backfill [DR-87] ---------------- */
+const VISION = 'https://data.binance.vision/';
+async function visionList(prefix, marker) {
+  const proxy = await getProxy();
+  const url = VISION + '?prefix=' + encodeURIComponent(prefix) + '&delimiter=%2F' + (marker ? '&marker=' + encodeURIComponent(marker) : '');
+  let r;
+  try { r = await fetch(proxy + url); } catch (e) { throw { cause: classifyFetchError(e, null) }; }
+  if (!r.ok) throw { cause: classifyFetchError(null, r) };
+  const xml = new DOMParser().parseFromString(await r.text(), 'text/xml');
+  const prefixes = [...xml.getElementsByTagName('Prefix')].map(x => x.textContent).filter(x => x !== prefix);
+  const keys = [...xml.getElementsByTagName('Key')].map(x => x.textContent);
+  const truncated = ((xml.getElementsByTagName('IsTruncated')[0] || {}).textContent || '') === 'true';
+  const nextEl = xml.getElementsByTagName('NextMarker')[0];
+  const next = nextEl ? nextEl.textContent : (prefixes.length ? prefixes[prefixes.length - 1] : (keys.length ? keys[keys.length - 1] : null));
+  return { prefixes, keys, truncated, next };
+}
+let gyCancel = false;
+async function backfillGraveyard() {
+  const status = $('#gyStatus');
+  gyCancel = false;
+  $('#gyBtn').style.display = 'none'; $('#gyCancelBtn').style.display = '';
+  $('#gyCancelBtn').onclick = () => { gyCancel = true; };
+  const endGy = () => { $('#gyBtn').style.display = ''; $('#gyCancelBtn').style.display = 'none'; };
+  try {
+    status.innerHTML = '<span class="spin"></span>&nbsp; Probing data.binance.vision…';
+    await visionList('data/spot/monthly/klines/');                               // probe: throws on CORS/network
+    status.innerHTML = '<span class="spin"></span>&nbsp; Fetching current symbol list (exchangeInfo)…';
+    const proxy = await getProxy();
+    const exInfo = await (await fetch(proxy + 'https://api.binance.com/api/v3/exchangeInfo')).json();
+    const live = new Set((exInfo.symbols || []).map(s => s.symbol));
+    status.innerHTML = '<span class="spin"></span>&nbsp; Enumerating every pair ever listed…';
+    const everDirs = [];
+    let marker = null;
+    for (let page = 0; page < 40; page++) {
+      const l = await visionList('data/spot/monthly/klines/', marker);
+      everDirs.push(...l.prefixes);
+      if (!l.truncated || !l.next || gyCancel) break;
+      marker = l.next;
+    }
+    const uex = userExclSet();
+    const dead = everDirs.map(d => d.split('/').filter(Boolean).pop())
+      .filter(s => s && s.endsWith('USDT') && !live.has(s) && !/(UP|DOWN|BULL|BEAR)USDT$/.test(s) && !excludedBase(s.slice(0, -4), uex));
+    if (!dead.length) { endGy(); status.innerHTML = '<div class="warnline">⚠ &nbsp;No delisted USDT pairs found in the archive listing — nothing to backfill.</div>'; return; }
+    const maxRun = Math.min(+$('#gyMax').value || 60, 400);
+    let cached = 0, added = 0, thin = 0, failed = 0, attempted = 0;
+    for (const symRaw of dead) {
+      if (gyCancel || attempted >= maxRun) break;
+      const sym = symRaw.slice(0, -4) + '/USDT';
+      const have = await DB.get('panel', sym);
+      if (have && have.delisted) { cached++; continue; }
+      attempted++;
+      try {
+        status.innerHTML = `<span class="spin"></span>&nbsp; ${symRaw} — listing months (${added} added · ${thin} too short · ${failed} failed)…`;
+        const l = await visionList(`data/spot/monthly/klines/${symRaw}/1d/`);
+        const zips = l.keys.filter(k => k.endsWith('.zip'));
+        if (!zips.length) { failed++; continue; }
+        let bars = [];
+        for (let z = 0; z < zips.length; z++) {
+          if (gyCancel) break;
+          status.innerHTML = `<span class="spin"></span>&nbsp; ${symRaw} — ${z + 1}/${zips.length} months…`;
+          const resp = await fetch(proxy + VISION + zips[z]);
+          if (!resp.ok) continue;
+          bars.push(...await BT.parseKlineZip(await resp.arrayBuffer()));
+        }
+        if (gyCancel) break;
+        const cl = BT.cleanBars(bars);
+        if (cl.bars.length < 1010) { thin++; await DB.put('panel', sym, { sym, delisted: true, thin: true, bars: [], fetchedAt: Date.now() }); continue; }
+        await DB.put('panel', sym, { sym, delisted: true, bars: cl.bars, fetchedAt: Date.now() });
+        added++;
+      } catch (e) { failed++; }
+    }
+    endGy();
+    status.innerHTML = `<div class="okline">✓ &nbsp;Graveyard: <b>${added}</b> delisted coins backfilled this run (${cached} already cached · ${thin} too short for the panel · ${failed} failed · ${dead.length} dead pairs known${gyCancel ? ' · stopped early — run again to resume' : ''}). Re-run the panel above with the graveyard box ticked for survivorship-corrected results.</div>`;
+  } catch (e) {
+    endGy();
+    const cause = (e && e.cause) || '';
+    status.innerHTML = `<div class="errline">✕ &nbsp;Archive unreachable${cause ? ' (' + cause + ')' : ''} — data.binance.vision may not allow browser access from this network. Set a CORS proxy in Settings and retry; the panel still works survivor-only. [DR-87]</div>`;
+  }
+}
+
 /* ---------------- settings: self-test [DR-37], proxy, data mgmt ---------------- */
 async function selfTest() {
   const out = $('#selfTestOut');
@@ -3951,6 +4292,10 @@ async function selfTest() {
     results.push(okEx ? line('✓', 'okline', EXCHANGES[exId].name + ' reachable via direct REST' + (proxy ? ' (through your proxy)' : ''))
                       : line('✕', 'errline', EXCHANGES[exId].name + ' unreachable from this browser (CORS/network).'));
   }
+  let visionOK = false;                                                          /* [DR-87] archive probe */
+  try { const r = await fetch(proxy + 'https://data.binance.vision/?prefix=data%2Fspot%2Fmonthly%2Fklines%2FBTCUSDT%2F1d%2F&delimiter=%2F'); visionOK = r.ok; } catch (e) { visionOK = false; }
+  results.push(visionOK ? line('✓', 'okline', 'data.binance.vision archive reachable — graveyard backfill available [DR-87]')
+                        : line('✕', 'errline', 'data.binance.vision blocked from this browser — graveyard backfill needs a proxy (Settings). [DR-87]'));
   const anyOK = Object.values(verdicts).some(Boolean);
   const verdict = anyOK
     ? line('✓', 'okline', '<b>Live data works on this device</b> via: ' + Object.keys(verdicts).filter(k => verdicts[k]).map(k => EXCHANGES[k].name).join(', ') + '.')
@@ -4038,6 +4383,8 @@ async function boot() {
   $('#robustBtn').onclick = robustnessCheck;                                     /* [DR-77] */
   $('#lacBtn').onclick = lookaheadUI;                                            /* [DR-79] */
   $('#recBtn').onclick = recursiveUI;
+  $('#xsRunBtn').onclick = runPanelLab;                                          /* [DR-86] */
+  $('#gyBtn').onclick = backfillGraveyard;                                       /* [DR-87] */
   renderFoSyms();                                                                /* [DR-80] */
   $('#foExSel').onchange = renderFoSyms;
   $('#foRunBtn').onclick = runFolio;
