@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.0</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v4.5</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -218,6 +218,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <div style="flex:1"></div>
     </div>
     <div class="hint">Only long above the rolling volume-weighted price — the average holder is in profit.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="mini toggle" id="fBreadthOn" type="button" style="min-width:104px">Breadth: off</button>
+      <div style="flex:1"><label class="f" style="margin-top:0">Min fraction bullish</label><select id="fBreadthFrac"><option value="0.5" selected>2 of 4 lookbacks</option><option value="0.75">3 of 4</option><option value="1">All 4</option></select></div>
+    </div>
+    <div class="hint">Trend-breadth composite: enter only when close is above ≥ the chosen fraction of its 20/50/100/200-bar averages — an ensemble regime gate, better-evidenced than any single lookback. [DR-83]</div>
   </div>
   <h2>Costs &amp; capital</h2>
   <div class="card">
@@ -239,6 +244,12 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <div style="flex:1"><label class="f">Trailing stop %</label><input type="number" id="trailIn" value="0" min="0" max="90" step="0.5" inputmode="decimal"></div>
       <div style="flex:1"><label class="f">Max-DD breaker %</label><input type="number" id="cbIn" value="0" min="0" max="95" step="1" inputmode="decimal"></div>
     </div>
+    <label class="f">Stop guard <span style="color:var(--muted)">— lock out entries after repeated stop-outs (0 stops = off) [DR-82]</span></label>
+    <div class="row">
+      <div style="flex:1"><label class="f">Stops</label><input type="number" id="pgN" value="0" min="0" max="10" step="1" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f">…within (bars)</label><input type="number" id="pgLb" value="30" min="5" max="200" step="5" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f">Lock (bars)</label><input type="number" id="pgLock" value="20" min="1" max="200" step="1" inputmode="numeric"></div>
+    </div>
     <label class="f">Position sizing</label>
     <select id="sizeMode">
       <option value="full" selected>All-in — 100% of equity per trade</option>
@@ -254,6 +265,16 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <p class="hint">Stops fill inside the bar (gaps fill at the open); after a protective exit, re-entry waits for a fresh signal. Sweeps and walk-forward use these settings too.</p>
     <button class="btn" id="runBtn">Run backtest</button>
     <div id="runStatus"></div>
+  </div>
+
+  <h2>Honesty checks</h2>
+  <div class="card">
+    <div class="hint">Automated bias detectors for the CURRENT config. <b>Lookahead:</b> every signal must reproduce identically when the data ends at the signal's own bar — if it changes, the strategy peeked at the future. <b>Warm-up:</b> how much history must be fetched before live indicator values match the backtest. [DR-79]</div>
+    <div class="row" style="margin-top:8px">
+      <button class="mini" id="lacBtn">Certify: no lookahead</button>
+      <button class="mini" id="recBtn">Warm-up sensitivity</button>
+    </div>
+    <div id="honestyOut"></div>
   </div>
 
   <h2>Robustness — same config, every dataset</h2>
@@ -301,6 +322,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <label class="f">Optimize for</label>
     <select id="swMetric">
       <option value="ir" selected>Outperform B&amp;H — Information Ratio (recommended)</option>
+      <option value="irp">IR, trade-count penalized — anti-overfit [DR-82]</option>
       <option value="sharpe">Sharpe (risk-adjusted)</option>
       <option value="sortino">Sortino</option>
       <option value="calmar">Calmar (return / drawdown)</option>
@@ -377,6 +399,30 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <div id="trackList"></div>
 </section>
 
+<!-- ================= FOLIO [DR-80] ================= -->
+<section class="screen" id="scr-folio">
+  <h2>Portfolio — allocator tournament</h2>
+  <div class="card">
+    <div class="hint">Multi-asset, long-only, periodic rebalancing with fees charged on turnover. Every allocator is <b>rule-based — nothing is fitted</b>, so overfitting risk is structurally low. All are judged against the 1/N null: an equal-weight BUY &amp; HOLD of the same coins, which most optimizers fail to beat out-of-sample. [DR-80]</div>
+    <label class="f">Exchange</label>
+    <select id="foExSel">
+      <option value="binance" selected>Binance (USDT)</option>
+      <option value="coinbase">Coinbase (USD)</option>
+      <option value="bitstamp">Bitstamp (USD)</option>
+    </select>
+    <label class="f">Coins — pick 2 to 8</label>
+    <div class="row chips" id="foSyms"></div>
+    <div class="row">
+      <div style="flex:1"><label class="f">Rebalance (days)</label><select id="foReb"><option>7</option><option selected>30</option><option>90</option></select></div>
+      <div style="flex:1"><label class="f">Vol target %/yr</label><input type="number" id="foVolT" value="30" min="5" max="100" step="5" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f">Momentum (bars)</label><input type="number" id="foMom" value="90" min="30" max="365" step="10" inputmode="numeric"></div>
+    </div>
+    <button class="btn" id="foRunBtn">Fetch &amp; run allocator tournament</button>
+    <div class="hint" id="foStatus"></div>
+  </div>
+  <div id="foResults"></div>
+</section>
+
 <!-- ================= SETTINGS ================= -->
 <section class="screen" id="scr-set">
   <h2>Connectivity</h2>
@@ -404,7 +450,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v4.5</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -414,6 +460,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
   <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.5M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
 </div>
@@ -643,7 +690,49 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     for (let i = 0; i < n; i++) { tenkan[i] = mid(tenkanP, i); kijun[i] = mid(kijunP, i); }
     return { tenkan, kijun };
   }
-  BT.ind = { sma, ema, rsi, atr, bollinger, supertrend, adx, ichimoku, wma, rma };
+  function aroon(C, p) {                                 // Aroon up/down, 0..100 [DR-83]
+    const n = C.n, up = new Float64Array(n).fill(NaN), dn = new Float64Array(n).fill(NaN);
+    for (let i = p; i < n; i++) {
+      let hiI = i - p, loI = i - p;
+      for (let j = i - p; j <= i; j++) { if (C.h[j] >= C.h[hiI]) hiI = j; if (C.l[j] <= C.l[loI]) loI = j; }
+      up[i] = 100 * (p - (i - hiI)) / p;
+      dn[i] = 100 * (p - (i - loI)) / p;
+    }
+    return { up, dn };
+  }
+  function vortex(C, p) {                                // Vortex VI+/VI− [DR-83]
+    const n = C.n, vip = new Float64Array(n).fill(NaN), vin = new Float64Array(n).fill(NaN);
+    const vmP = new Float64Array(n), vmM = new Float64Array(n), tr2 = new Float64Array(n);
+    for (let i = 1; i < n; i++) {
+      vmP[i] = Math.abs(C.h[i] - C.l[i - 1]);
+      vmM[i] = Math.abs(C.l[i] - C.h[i - 1]);
+      tr2[i] = Math.max(C.h[i] - C.l[i], Math.abs(C.h[i] - C.c[i - 1]), Math.abs(C.l[i] - C.c[i - 1]));
+    }
+    let sP = 0, sM = 0, sT = 0;
+    for (let i = 1; i < n; i++) {
+      sP += vmP[i]; sM += vmM[i]; sT += tr2[i];
+      if (i > p) { sP -= vmP[i - p]; sM -= vmM[i - p]; sT -= tr2[i - p]; }
+      if (i >= p && sT > 0) { vip[i] = sP / sT; vin[i] = sM / sT; }
+    }
+    return { vip, vin };
+  }
+  function chop(C, p) {                                  // Choppiness Index, 0..100 (high = range-bound) [DR-83]
+    const n = C.n, out = new Float64Array(n).fill(NaN), tr2 = new Float64Array(n);
+    tr2[0] = C.h[0] - C.l[0];
+    for (let i = 1; i < n; i++) tr2[i] = Math.max(C.h[i] - C.l[i], Math.abs(C.h[i] - C.c[i - 1]), Math.abs(C.l[i] - C.c[i - 1]));
+    let sT = 0;
+    for (let i = 0; i < n; i++) {
+      sT += tr2[i];
+      if (i >= p) {
+        sT -= tr2[i - p];
+        let hh = -Infinity, ll = Infinity;
+        for (let j = i - p + 1; j <= i; j++) { if (C.h[j] > hh) hh = C.h[j]; if (C.l[j] < ll) ll = C.l[j]; }
+        if (hh > ll && sT > 0) out[i] = 100 * Math.log10(sT / (hh - ll)) / Math.log10(p);
+      }
+    }
+    return out;
+  }
+  BT.ind = { sma, ema, rsi, atr, bollinger, supertrend, adx, ichimoku, wma, rma, aroon, vortex, chop };
 
   function macdLines(C, p) {                             // shared by macd signals + overlays [DR-54]
     const f = ema(C.c, p.fast), s = ema(C.c, p.slow), n = C.n;
@@ -795,6 +884,18 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
         return { price: [{ label: `High ${p.entry}`, role: 0, data: hh }, { label: `Low ${p.exit}`, role: 1, data: ll }] };
       } },
 
+    { id: 'aroonx', name: 'Aroon Trend',                 /* [DR-83] in market while Aroon-Up > Aroon-Down */
+      params: [{ key: 'period', label: 'Aroon period', def: 25, min: 5, max: 200, step: 1 }],
+      warmup: (p) => p.period + 2,
+      signals: (C, p) => {
+        const a = aroon(C, p.period), out = new Int8Array(C.n);
+        for (let i = 0; i < C.n; i++) out[i] = (isFinite(a.up[i]) && a.up[i] > a.dn[i]) ? 1 : 0;
+        return out;
+      },
+      overlays: (C, p) => { const a = aroon(C, p.period); return { sub: [
+        { label: 'Aroon Up ' + p.period, role: 0, data: a.up }, { label: 'Aroon Down', role: 1, data: a.dn },
+      ], subLevels: [50] }; } },
+
     { id: 'macd', name: 'MACD Trend',
       params: [{ key: 'fast', label: 'Fast', def: 12, min: 2, max: 100, step: 1 },
                { key: 'slow', label: 'Slow', def: 26, min: 3, max: 200, step: 1 },
@@ -825,11 +926,14 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const trail = (opts.trailStopPct || 0) / 100, cb = (opts.maxDDStopPct || 0) / 100;
     const sz = opts.sizing || { mode: 'full' };
     const atrArr = sz.mode === 'atr' ? BT.ind.atr(C, sz.atrPeriod || 14) : null;
+    const guard = opts.protections && opts.protections.slGuard && opts.protections.slGuard.nStops > 0 ? opts.protections.slGuard : null;   /* [DR-82] */
     const n = C.n;
     const equity = new Float64Array(n);
     const trades = [];
     let cash = cap, qty = 0, pos = 0, entryIdx = -1, entryPx = 0, entryEq = 0, posBars = 0;
     let hiSince = 0, peakEq = cap, blocked = false, forceExit = false, entryFrac = 1;
+    const stopTimes = [];
+    let lockUntil = -1;
 
     const doExit = (t, rawPx, reason) => {
       const px = rawPx * (1 - slip);
@@ -837,6 +941,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       trades.push({ entryIdx, exitIdx: t, entryPx, exitPx: px, ret: cash / entryEq - 1, reason, frac: entryFrac });
       qty = 0; pos = 0;
       if (reason !== 'signal') blocked = true;                                   /* [DR-49] re-entry needs flat signal */
+      if (guard && (reason === 'stop' || reason === 'trail')) {                  /* [DR-82] StoplossGuard */
+        stopTimes.push(t);
+        while (stopTimes.length && stopTimes[0] < t - guard.lookback) stopTimes.shift();
+        if (stopTimes.length >= guard.nStops) lockUntil = t + guard.lock;
+      }
     };
 
     for (let t = 0; t < n; t++) {
@@ -847,7 +956,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
         if (pos === 1 && (forceExit || want === 0)) {
           doExit(t, C.o[t], forceExit ? 'breaker' : 'signal');
           forceExit = false;
-        } else if (want === 1 && pos === 0 && !blocked) {
+        } else if (want === 1 && pos === 0 && !blocked && t > lockUntil) {       /* [DR-82] guard lock blocks entries */
           const px = C.o[t] * (1 + slip);
           entryEq = cash;
           let f = 1;                                                             /* [DR-53] */
@@ -918,6 +1027,19 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const annVol = sd * Math.sqrt(barsPerYear);
     const sharpe = sd > 0 ? (m / sd) * Math.sqrt(barsPerYear) : 0;       // rf=0 [DR-04]
     const sortino = ddev > 0 ? (m / ddev) * Math.sqrt(barsPerYear) : 0;
+    // Smart Sharpe [DR-79]: penalize positive serial correlation (AR(1) approx, quantstats-style)
+    let smartSharpe = sharpe;
+    if (rets.length > 2 && vs > 0) {
+      let num = 0;
+      for (let i = 1; i < rets.length; i++) num += (rets[i] - m) * (rets[i - 1] - m);
+      const rho = num / vs;
+      if (rho > 1e-9 && rho < 1) {
+        let s = 0;
+        const nn = rets.length;
+        for (let i = 1; i < nn; i++) { const t = ((nn - i) / nn) * Math.pow(rho, i); s += t; if (t < 1e-12) break; }
+        smartSharpe = sharpe / Math.sqrt(1 + 2 * s);
+      }
+    }
 
     // max drawdown depth + duration (bars peak->recovery or end)
     let peak = equity[start], maxDD = 0, ddStart = start, maxDur = 0, curStart = start;
@@ -930,26 +1052,37 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const calmar = maxDD < 0 ? cagr / Math.abs(maxDD) : (cagr > 0 ? Infinity : 0);
 
     // excess vs same-window close-basis B&H [DR-62]
-    let ir = 0, alphaTotal = 0, tExcess = 0;
+    let ir = 0, alphaTotal = 0, tExcess = 0, minTRL = Infinity;
     if (C.c && n - start > 2) {
-      let mEx = 0, m2Ex = 0, kEx = 0;
+      let mEx = 0, m2Ex = 0, kEx = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
       for (let i = start + 1; i < n; i++) {
         const ex = (equity[i] / equity[i - 1]) - (C.c[i] / C.c[i - 1]);
         kEx++;
         const d = ex - mEx; mEx += d / kEx; m2Ex += d * (ex - mEx);
+        s1 += ex; s2 += ex * ex; s3 += ex * ex * ex; s4 += ex * ex * ex * ex;
       }
       const sdEx = kEx > 1 ? Math.sqrt(m2Ex / (kEx - 1)) : 0;
       // sdEx below fp-noise floor => strategy ≡ benchmark; IR is 0, not noise/noise [DR-62]
       ir = sdEx > 1e-9 ? (mEx / sdEx) * Math.sqrt(barsPerYear) : 0;
       tExcess = sdEx > 1e-9 ? mEx / (sdEx / Math.sqrt(kEx)) : 0;
       alphaTotal = totalReturn - (C.c[n - 1] / C.c[start] - 1);
+      // Minimum Track Record Length [DR-79] (Bailey–LdP): bars of THIS excess stream
+      // needed to claim true excess > 0 at 95% one-sided, given skew/kurtosis.
+      if (sdEx > 1e-9 && mEx > 0 && kEx > 3) {
+        const mu = s1 / kEx, va = Math.max(1e-24, s2 / kEx - mu * mu);
+        const g3 = (s3 / kEx - 3 * mu * va - mu * mu * mu) / Math.pow(va, 1.5);
+        const g4 = (s4 / kEx - 4 * mu * (s3 / kEx) + 6 * mu * mu * (s2 / kEx) - 3 * Math.pow(mu, 4)) / (va * va);
+        const sr = mEx / sdEx;
+        minTRL = 1 + Math.max(0, 1 - g3 * sr + ((g4 - 1) / 4) * sr * sr) * Math.pow(1.645 / sr, 2);
+      }
     }
     const closed = (trades || []).filter(t => !t.open);
     const all = trades || [];
     const wins = all.filter(t => t.ret > 0), losses = all.filter(t => t.ret <= 0);
     const grossW = wins.reduce((a, t) => a + t.ret, 0), grossL = Math.abs(losses.reduce((a, t) => a + t.ret, 0));
+    const irp = ir * Math.sqrt(Math.min(1, all.length / 20));                    /* [DR-82] trade-count-penalized IR */
     return {
-      ir, alphaTotal, tExcess,
+      ir, irp, alphaTotal, tExcess, minTRL, smartSharpe,
       totalReturn, cagr, annVol, sharpe, sortino,
       maxDrawdown: maxDD, maxDDBars: maxDur, calmar,
       exposure: (n - start) > 0 ? (posBars || 0) / (n - start) : 0,
@@ -1003,6 +1136,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     if (!filters) return 0;
     let w = 0;
     if (filters.slope) w = Math.max(w, Math.ceil(filters.slope.len * (MA_WARM_MULT[filters.slope.type || 'SMA'] || 3)) + filters.slope.k);  /* [DR-65] */
+    if (filters.breadth) w = Math.max(w, Math.max(...(filters.breadth.lookbacks || [20, 50, 100, 200])) + 5);  /* [DR-83] */
     if (filters.adx) w = Math.max(w, filters.adx.len * 3);
     if (filters.vwap) w = Math.max(w, filters.vwap.len);
     if (filters.level) w = Math.max(w, Math.ceil(filters.level.len * (MA_WARM_MULT[filters.level.type || 'SMA'] || 3)) + 5);  /* [DR-67] */
@@ -1030,8 +1164,18 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return BT.entryBlock(BT.andSig(sig, BT.gateMask(C, filters)), BT.levelMask(C, filters));
   };
   BT.gateMask = function (C, filters) {
-    if (!filters || (!filters.slope && !filters.adx && !filters.vwap)) return null;
+    if (!filters || (!filters.slope && !filters.adx && !filters.vwap && !filters.breadth)) return null;
     const n = C.n, mask = new Int8Array(n).fill(1);
+    if (filters.breadth) {                                 /* [DR-83] trend-breadth composite: fraction of lookbacks bullish */
+      const lbs = filters.breadth.lookbacks || [20, 50, 100, 200];
+      const minFrac = filters.breadth.minFrac === undefined ? 0.5 : filters.breadth.minFrac;
+      const mas = lbs.map(L => sma(C.c, L));
+      for (let i = 0; i < n; i++) {
+        let cnt = 0, tot = 0;
+        for (const ma of mas) if (isFinite(ma[i])) { tot++; if (C.c[i] > ma[i]) cnt++; }
+        mask[i] &= (tot === lbs.length && cnt / tot >= minFrac) ? 1 : 0;
+      }
+    }
     if (filters.slope) {
       const s = maOf(filters.slope.type || 'SMA', C, filters.slope.len), k = filters.slope.k;   /* [DR-65] any MA type */
       for (let i = 0; i < n; i++) mask[i] &= (i >= k && isFinite(s[i]) && isFinite(s[i - k]) && s[i] - s[i - k] > 0) ? 1 : 0;
@@ -1153,6 +1297,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       const r = BT.run(C, sig, { ...opts, warmup: commonWarm });
       const entry = { params: p, m: r.metrics };
       if (opts.pboBlocks) entry.blocks = BT.blockMoments(r.equity, commonWarm, opts.pboBlocks);   /* [DR-76] */
+      if (opts.keepRets) {                                                        /* [DR-81] daily returns for SPA */
+        const rr = new Float64Array(Math.max(0, C.n - commonWarm - 1));
+        for (let i2 = commonWarm + 1; i2 < C.n; i2++) rr[i2 - commonWarm - 1] = r.equity[i2] / r.equity[i2 - 1] - 1;
+        entry.rets = rr;
+      }
       results.push(entry);
       if (onProgress && (i % 5 === 0)) onProgress(i + 1, valid.length);
     }
@@ -1348,6 +1497,64 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return { windows, stitched: stitched - 1, stitchedBench: stitchedBench - 1, distinctParams: sets.size, nWin, start, segLen, oosFrac: (n - start) / n };
   };
 
+  /* ---------- honesty automation [DR-79] (freqtrade lookahead/recursive concepts, own impl) ---------- */
+  // A signal that was honest must reproduce identically when the data ends AT the signal's
+  // bar. Sample signal-change bars, truncate, recompute, diff. Any change = future leakage.
+  BT.lookaheadCheck = function (bars, stratId, params, filters, nSamples) {
+    const C = colsFromBars(bars);
+    const strat = BT.strategy(stratId);
+    const full = BT.applyFilters(C, strat.signals(C, params), filters);
+    const n = C.n;
+    const changes = [];
+    for (let i = 1; i < n - 1; i++) if (full[i] !== full[i - 1]) changes.push(i);
+    if (!changes.length) return { checked: 0, reproduced: 0, biased: [], totalSignals: 0 };
+    const N = Math.min(nSamples || 20, changes.length);
+    const pick = new Set();
+    for (let j = 0; j < N; j++) pick.add(changes[Math.floor(j * (changes.length - 1) / Math.max(1, N - 1))]);
+    const biased = [];
+    for (const idx of pick) {
+      const Ct = colsFromBars(bars.slice(0, idx + 1));
+      const cut = BT.applyFilters(Ct, strat.signals(Ct, params), filters);
+      if (cut[idx] !== full[idx] || cut[idx - 1] !== full[idx - 1]) biased.push(idx);
+    }
+    return { checked: pick.size, reproduced: pick.size - biased.length, biased, totalSignals: changes.length };
+  };
+  // Recursive indicators converge with history length: quantify last-bar variance per
+  // indicator when computed from limited warm-up depths vs full history.
+  BT.recursiveCheck = function (bars, stratId, params, filters, depths) {
+    depths = depths || [100, 200, 400, 800, 1600];
+    const n = bars.length;
+    const C = colsFromBars(bars);
+    const strat = BT.strategy(stratId);
+    const grab = (Cx) => {
+      const out = {};
+      const ov = strat.overlays ? strat.overlays(Cx, params) : null;
+      for (const s of (ov && ov.price) || []) out[s.label] = s.data[Cx.n - 1];
+      for (const s of (ov && ov.sub) || []) out[s.label] = s.data[Cx.n - 1];
+      if (filters && filters.level) out['gate ' + (filters.level.type || 'SMA') + filters.level.len] = maOf(filters.level.type || 'SMA', Cx, filters.level.len)[Cx.n - 1];
+      return out;
+    };
+    const fullVals = grab(C);
+    const sigFull = BT.applyFilters(C, strat.signals(C, params), filters);
+    const rows = [];
+    for (const d of depths) {
+      if (d >= n) { rows.push({ depth: d, na: true }); continue; }
+      const Cs = colsFromBars(bars.slice(n - d));
+      const vals = grab(Cs);
+      const sig = BT.applyFilters(Cs, strat.signals(Cs, params), filters);
+      const diffs = [];
+      for (const k of Object.keys(fullVals)) {
+        const v = fullVals[k], w = vals[k];
+        const pct = (isFinite(v) && isFinite(w) && Math.abs(v) > 1e-12) ? Math.abs(w - v) / Math.abs(v)
+                  : (isFinite(v) === isFinite(w) ? 0 : NaN);
+        diffs.push({ label: k, pct });
+      }
+      rows.push({ depth: d, sigSame: sig[Cs.n - 1] === sigFull[n - 1], diffs,
+                  maxPct: Math.max(0, ...diffs.map(x => Number.isFinite(x.pct) ? x.pct : 1)) });
+    }
+    return { rows, warmup: Math.max(strat.warmup(params), BT.filterWarmup(filters)) };
+  };
+
   /* ---------- PBO via CSCV [DR-76] (Bailey, Borwein, López de Prado, Zhu 2014) ---------- */
   // Per-block return moments [n, Σr, Σr²] for one equity curve — cheap to combine later.
   BT.blockMoments = function (equity, warm, S) {
@@ -1358,9 +1565,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const mom = [];
     for (let b = 0; b < S; b++) {
       const s = b * per, e = (b === S - 1) ? rets.length : s + per;   // last block absorbs remainder
-      let n = 0, su = 0, s2 = 0;
-      for (let i = s; i < e; i++) { n++; su += rets[i]; s2 += rets[i] * rets[i]; }
-      mom.push([n, su, s2]);
+      let n = 0, su = 0, s2 = 0, cr = 1;
+      for (let i = s; i < e; i++) { n++; su += rets[i]; s2 += rets[i] * rets[i]; cr *= 1 + rets[i]; }
+      mom.push([n, su, s2, cr - 1]);                                  // [n, Σr, Σr², compounded] [DR-81]
     }
     return mom;
   };
@@ -1405,6 +1612,194 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
              medLambda: lambdas[Math.floor(lambdas.length / 2)] };
   };
 
+  /* ---------- formal tests [DR-81]: stationary bootstrap, SPA, CPCV, MCS ---------- */
+  // Stationary bootstrap indices (Politis–Romano 1994): geometric blocks, wrap-around.
+  BT.sbIndices = function (n, avgBlock, rnd) {
+    const idx = new Int32Array(n);
+    const p = 1 / Math.max(1, avgBlock);
+    let cur = Math.floor(rnd() * n);
+    for (let t = 0; t < n; t++) {
+      idx[t] = cur;
+      cur = (rnd() < p) ? Math.floor(rnd() * n) : (cur + 1) % n;
+    }
+    return idx;
+  };
+  // Heuristic expected block length: n^(1/3) scaled by vol-clustering strength (autocorr of r²).
+  BT.autoBlockLen = function (rets) {
+    const n = rets.length;
+    if (n < 50) return 5;
+    let m = 0;
+    for (const r of rets) m += r * r;
+    m /= n;
+    let num = 0, den = 0, prev = rets[0] * rets[0] - m;
+    for (let i = 1; i < n; i++) { const d = rets[i] * rets[i] - m; num += d * prev; prev = d; }
+    for (let i = 0; i < n; i++) { const d = rets[i] * rets[i] - m; den += d * d; }
+    const rho = den > 0 ? Math.max(0, num / den) : 0;
+    return Math.max(5, Math.min(100, Math.round(Math.pow(n, 1 / 3) * (1 + 2 * rho))));
+  };
+  // Block bootstrap of the DAILY return series — preserves vol clustering the IID trade
+  // bootstrap destroys. Distribution of total return + max drawdown.
+  BT.blockBootstrapEquity = function (rets, B, seed) {
+    if (!rets || rets.length < 100) return null;
+    const n = rets.length, b = BT.autoBlockLen(rets), rnd = mulberry32(seed || 99);
+    B = B || 1000;
+    const finals = new Float64Array(B), dds = new Float64Array(B);
+    for (let s = 0; s < B; s++) {
+      const idx = BT.sbIndices(n, b, rnd);
+      let eq = 1, peak = 1, dd = 0;
+      for (let t = 0; t < n; t++) {
+        eq *= 1 + rets[idx[t]];
+        if (eq > peak) peak = eq;
+        const d2 = eq / peak - 1;
+        if (d2 < dd) dd = d2;
+      }
+      finals[s] = eq - 1; dds[s] = dd;
+    }
+    finals.sort(); dds.sort();
+    const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
+    let losses = 0;
+    for (const x of finals) if (x < 0) losses++;
+    return { blockLen: b, nSim: B, ret: { p5: q(finals, 0.05), p50: q(finals, 0.5), p95: q(finals, 0.95) },
+             dd: { p50: q(dds, 0.5), worst5: q(dds, 0.05) }, probLoss: losses / B };
+  };
+  // Hansen (2005) SPA: after searching m variants, does the BEST really beat the benchmark?
+  // Shared bootstrap indices preserve cross-variant correlation; Hansen recentering keeps
+  // hopeless variants from diluting power. Returns a real p-value.
+  BT.spaTest = function (retsM, benchR, B, seed) {
+    const m = retsM.length, T = benchR.length;
+    if (!m || T < 100) return null;
+    const d = retsM.map(r => { const x = new Float64Array(T); for (let t = 0; t < T; t++) x[t] = r[t] - benchR[t]; return x; });
+    const dbar = d.map(x => { let s = 0; for (let t = 0; t < T; t++) s += x[t]; return s / T; });
+    const rnd = mulberry32(seed || 7);
+    const bLen = BT.autoBlockLen(benchR);
+    B = B || 300;
+    const bm = [];
+    for (let bi = 0; bi < B; bi++) {
+      const idx = BT.sbIndices(T, bLen, rnd);
+      const row = new Float64Array(m);
+      for (let k = 0; k < m; k++) {
+        const dk = d[k];
+        let s = 0;
+        for (let t = 0; t < T; t++) s += dk[idx[t]];
+        row[k] = s / T;
+      }
+      bm.push(row);
+    }
+    const omega = new Float64Array(m);
+    for (let k = 0; k < m; k++) {
+      let s = 0, s2 = 0;
+      for (let bi = 0; bi < B; bi++) { s += bm[bi][k]; s2 += bm[bi][k] * bm[bi][k]; }
+      const mu = s / B;
+      omega[k] = Math.sqrt(Math.max(0, (s2 / B - mu * mu) * T));
+    }
+    const sq = Math.sqrt(T);
+    let Tstat = 0;
+    for (let k = 0; k < m; k++) if (omega[k] > 1e-12) Tstat = Math.max(Tstat, sq * dbar[k] / omega[k]);
+    const thresh = Math.sqrt(2 * Math.log(Math.log(Math.max(3, T))) / T);
+    let ge = 0;
+    for (let bi = 0; bi < B; bi++) {
+      let Tb = 0;
+      for (let k = 0; k < m; k++) {
+        if (omega[k] <= 1e-12) continue;
+        const g = dbar[k] >= -omega[k] * thresh ? dbar[k] : 0;   // Hansen ĝ_k
+        Tb = Math.max(Tb, sq * (bm[bi][k] - g) / omega[k]);
+      }
+      if (Tb >= Tstat) ge++;
+    }
+    let bestK = 0;
+    for (let k = 1; k < m; k++) if (dbar[k] > dbar[bestK]) bestK = k;
+    return { p: ge / B, Tstat, m, B, blockLen: bLen, bestDbarAnn: dbar[bestK] * 365 };
+  };
+  // CPCV path distribution [DR-81]: for every C(S,k) test-set, select the best combo on the
+  // S−k train blocks, evaluate on the k test blocks; stitch into φ = k·C(S,k)/S full OOS
+  // paths. Answers "what does the SELECTION PROCESS deliver?" as a distribution, not a point.
+  BT.cpcvPaths = function (blockList, S, k) {
+    k = k || 2;
+    const cfgs = blockList.filter(Boolean);
+    if (cfgs.length < 4) return null;
+    const testSets = [];
+    (function rec(start, acc) {
+      if (acc.length === k) { testSets.push(acc.slice()); return; }
+      for (let i = start; i < S; i++) { acc.push(i); rec(i + 1, acc); acc.pop(); }
+    })(0, []);
+    const sharpeOf = (idxs, mom) => {
+      let n = 0, su = 0, s2 = 0;
+      for (const b of idxs) { n += mom[b][0]; su += mom[b][1]; s2 += mom[b][2]; }
+      if (n < 2) return 0;
+      const mean = su / n, v = Math.max(0, (s2 - n * mean * mean) / (n - 1)), sd = Math.sqrt(v);
+      return sd > 1e-12 ? mean / sd : 0;
+    };
+    const phi = k * testSets.length / S;
+    const occ = new Int32Array(S);
+    const pathRet = new Float64Array(phi).fill(1);
+    const winners = new Set();
+    for (const tset of testSets) {
+      const inTest = new Set(tset);
+      const trainIdx = [];
+      for (let b = 0; b < S; b++) if (!inTest.has(b)) trainIdx.push(b);
+      let best = 0, bestV = -Infinity;
+      for (let c = 0; c < cfgs.length; c++) { const v = sharpeOf(trainIdx, cfgs[c]); if (v > bestV) { bestV = v; best = c; } }
+      winners.add(best);
+      for (const g of tset) pathRet[occ[g]++] *= 1 + cfgs[best][g][3];
+    }
+    const paths = Array.from(pathRet, x => x - 1).sort((a, b) => a - b);
+    return { paths, phi, nSplits: testSets.length,
+             median: paths[Math.floor((paths.length - 1) / 2)], min: paths[0], max: paths[paths.length - 1],
+             distinctWinners: winners.size };
+  };
+  // Approximate Model Confidence Set over block moments: iteratively drop the worst combo
+  // until the remaining set is statistically indistinguishable (block-level bootstrap).
+  BT.mcsFromBlocks = function (blockList, S, B, alpha, seed) {
+    const cfgs = blockList.filter(Boolean);
+    if (cfgs.length < 2) return null;
+    B = B || 200; alpha = alpha || 0.10;
+    const rnd = mulberry32(seed || 21);
+    const meanAll = (mom, idxs) => { let n = 0, su = 0; for (const b of idxs) { n += mom[b][0]; su += mom[b][1]; } return n ? su / n : 0; };
+    const allIdx = Array.from({ length: S }, (_, i) => i);
+    const mu = cfgs.map(c => meanAll(c, allIdx));
+    // bootstrap block index sets, shared
+    const boots = [];
+    for (let bi = 0; bi < B; bi++) {
+      const idxs = [];
+      for (let j = 0; j < S; j++) idxs.push(Math.floor(rnd() * S));
+      boots.push(cfgs.map(c => meanAll(c, idxs)));
+    }
+    let live = cfgs.map((_, i) => i);
+    let pFinal = 1;
+    while (live.length > 1) {
+      const seC = new Map();                                 // cached pairwise bootstrap SEs
+      const key = (i, j) => i < j ? i * 10000 + j : j * 10000 + i;
+      for (let a = 0; a < live.length; a++) for (let b2 = a + 1; b2 < live.length; b2++) {
+        const i = live[a], j = live[b2];
+        let s = 0, s2 = 0;
+        for (let bi = 0; bi < B; bi++) { const dd = boots[bi][i] - boots[bi][j]; s += dd; s2 += dd * dd; }
+        const mB = s / B;
+        seC.set(key(i, j), Math.sqrt(Math.max(1e-24, s2 / B - mB * mB)));
+      }
+      let TR = 0;
+      for (let a = 0; a < live.length; a++) for (let b2 = a + 1; b2 < live.length; b2++) {
+        const t = Math.abs(mu[live[a]] - mu[live[b2]]) / seC.get(key(live[a], live[b2]));
+        if (t > TR) TR = t;
+      }
+      let ge = 0;
+      for (let bi = 0; bi < B; bi++) {
+        let TRb = 0;
+        for (let a = 0; a < live.length; a++) for (let b2 = a + 1; b2 < live.length; b2++) {
+          const i = live[a], j = live[b2];
+          const t = Math.abs((boots[bi][i] - boots[bi][j]) - (mu[i] - mu[j])) / seC.get(key(i, j));
+          if (t > TRb) TRb = t;
+        }
+        if (TRb >= TR) ge++;
+      }
+      pFinal = ge / B;
+      if (pFinal >= alpha) break;
+      let worst = live[0];
+      for (const i of live) if (mu[i] < mu[worst]) worst = i;
+      live = live.filter(i => i !== worst);
+    }
+    return { size: live.length, total: cfgs.length, p: pFinal, survivors: live };
+  };
+
   /* ---------- Monte Carlo trade-order bootstrap [DR-76] ---------- */
   BT.monteCarlo = function (trades, nSim, seed) {
     const closed = (trades || []).filter(t => !t.open).map(t => t.ret);
@@ -1444,6 +1839,130 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       out[i] = (above && rising) ? 1 : (!above && !rising) ? 3 : 2;
     }
     return out;
+  };
+
+  /* ---------- portfolio layer [DR-80] ---------- */
+  // Align daily bars across assets on common calendar days.
+  BT.alignCloses = function (list) {
+    if (!list || list.length < 2) return null;
+    const maps = list.map(d => new Map(d.bars.map(b => [Math.floor(b[0] / 86400000), b[4]])));
+    let keys = [...maps[0].keys()];
+    for (let i = 1; i < maps.length; i++) keys = keys.filter(k => maps[i].has(k));
+    keys.sort((a, b) => a - b);
+    const T = keys.length;
+    if (T < 200) return null;
+    const closes = list.map((d, i) => { const arr = new Float64Array(T); for (let t = 0; t < T; t++) arr[t] = maps[i].get(keys[t]); return arr; });
+    return { ts: keys.map(k => k * 86400000), closes, syms: list.map(d => d.sym), T };
+  };
+  function stdevWin(r, t, L) {
+    let s = 0, s2 = 0, n = 0;
+    for (let k = t - L + 1; k <= t; k++) { s += r[k]; s2 += r[k] * r[k]; n++; }
+    const m = s / n;
+    return Math.sqrt(Math.max(0, s2 / n - m * m));
+  }
+  function covWin(rets, t, L) {
+    const nA = rets.length, mu = new Float64Array(nA), S = [];
+    for (let i = 0; i < nA; i++) { let s = 0; for (let k = t - L + 1; k <= t; k++) s += rets[i][k]; mu[i] = s / L; }
+    for (let i = 0; i < nA; i++) {
+      S.push(new Float64Array(nA));
+      for (let j = 0; j <= i; j++) {
+        let s = 0;
+        for (let k = t - L + 1; k <= t; k++) s += (rets[i][k] - mu[i]) * (rets[j][k] - mu[j]);
+        S[i][j] = s / L; if (j < i) S[j][i] = S[i][j];
+      }
+    }
+    return S;
+  }
+  // Target weights at bar t using data ≤ t only. Long-only; Σw ≤ 1, remainder is cash.
+  BT.allocWeights = function (mode, rets, closes, t, cfg) {
+    const nA = rets.length;
+    const w = new Float64Array(nA);
+    const volLB = cfg.volLB || 30, covLB = cfg.covLB || 90, momLB = cfg.momLB || 90;
+    if (mode === 'ew') { w.fill(1 / nA); return w; }
+    if (mode === 'invvol') {
+      let s = 0;
+      for (let i = 0; i < nA; i++) { w[i] = 1 / Math.max(1e-6, stdevWin(rets[i], t, volLB)); s += w[i]; }
+      for (let i = 0; i < nA; i++) w[i] /= s;
+      return w;
+    }
+    if (mode === 'erc') {                                   // Spinu cyclical coordinate descent — no solver [DR-80]
+      const S = covWin(rets, t, covLB);
+      w.fill(1 / nA);
+      const lam = 1 / nA;
+      for (let sweep = 0; sweep < 200; sweep++) {
+        let delta = 0;
+        for (let i = 0; i < nA; i++) {
+          let b = 0;
+          for (let j = 0; j < nA; j++) if (j !== i) b += S[i][j] * w[j];
+          const a = Math.max(1e-12, S[i][i]);
+          const wi = (-b + Math.sqrt(b * b + 4 * a * lam)) / (2 * a);
+          delta = Math.max(delta, Math.abs(wi - w[i]));
+          w[i] = Math.max(1e-9, wi);
+        }
+        if (delta < 1e-10) break;
+      }
+      let s = 0;
+      for (let i = 0; i < nA; i++) s += w[i];
+      for (let i = 0; i < nA; i++) w[i] /= s;
+      return w;
+    }
+    if (mode === 'rmm') {                                   // risk-managed momentum: inv-vol among positive-momentum assets, vol-targeted [DR-80]
+      const elig = [];
+      for (let i = 0; i < nA; i++) if (closes[i][t] / closes[i][t - momLB] - 1 > 0) elig.push(i);
+      if (!elig.length) return w;                           // full cash
+      let s = 0;
+      for (const i of elig) { w[i] = 1 / Math.max(1e-6, stdevWin(rets[i], t, volLB)); s += w[i]; }
+      for (const i of elig) w[i] /= s;
+      const S = covWin(rets, t, covLB);
+      let pv = 0;
+      for (let i = 0; i < nA; i++) for (let j = 0; j < nA; j++) pv += w[i] * S[i][j] * w[j];
+      const dailyTarget = (cfg.volTargetAnn || 0.3) / Math.sqrt(365);
+      const scale = Math.min(1, pv > 0 ? dailyTarget / Math.sqrt(pv) : 1);
+      for (let i = 0; i < nA; i++) w[i] *= scale;
+      return w;
+    }
+    w.fill(1 / nA);
+    return w;
+  };
+  // Portfolio backtest: weights drift with returns, periodic rebalance, fee on turnover.
+  // Benchmark = equal-weight BUY & HOLD from the common warm-up bar (the 1/N null).
+  BT.portfolio = function (aligned, cfg) {
+    const { closes, T } = aligned;
+    const nA = closes.length;
+    const rets = closes.map(c => { const r = new Float64Array(T); for (let t = 1; t < T; t++) r[t] = c[t] / c[t - 1] - 1; return r; });
+    const warm = Math.max(cfg.covLB || 90, cfg.momLB || 90, cfg.volLB || 30) + 1;
+    if (T <= warm + 30) return null;
+    const fee = (cfg.feePct ?? 0.1) / 100;
+    const cap = cfg.capital || 10000;
+    const every = cfg.rebalanceEvery || 30;
+    const equity = new Float64Array(T).fill(cap);
+    let w = new Float64Array(nA), eq = cap, turnover = 0, rebalances = 0;
+    for (let t = warm; t < T; t++) {
+      if (t > warm) {
+        let g = 0;
+        for (let i = 0; i < nA; i++) g += w[i] * rets[i][t];
+        eq *= 1 + g;
+        for (let i = 0; i < nA; i++) w[i] = w[i] * (1 + rets[i][t]) / (1 + g);
+      }
+      if ((t - warm) % every === 0) {
+        const target = BT.allocWeights(cfg.alloc, rets, closes, t, cfg);
+        let dv = 0;
+        for (let i = 0; i < nA; i++) dv += Math.abs(target[i] - w[i]);
+        eq *= 1 - fee * dv;
+        turnover += dv; rebalances++;
+        w = target;
+      }
+      equity[t] = eq;
+      if (!(eq >= 0)) throw new Error('portfolio invariant violated @' + t);
+    }
+    const bench = new Float64Array(T).fill(cap);
+    for (let t = warm; t < T; t++) {
+      let g = 0;
+      for (let i = 0; i < nA; i++) g += (1 / nA) * (closes[i][t] / closes[i][warm]);
+      bench[t] = cap * g;
+    }
+    const metrics = BT.metrics(equity, { c: bench, n: T }, 365, warm, [], T - warm);
+    return { equity, bench, metrics, warm, turnover, rebalances, wLast: Array.from(w) };
   };
 
   /* ---------- signal state + forward tracking [DR-75] ---------- */
@@ -1595,19 +2114,33 @@ self.onmessage = function (e) {
       const tear = BT.tearsheet(r.equity, C, m.opts.barsPerYear || 365, warm, r.trades, monthly);  /* [DR-50] */
       const regime = BT.regimeBreakdown(r.equity, C, warm);                      /* [DR-62] */
       const mc = BT.monteCarlo(r.trades, 2000, 42);                              /* [DR-76] deterministic seed */
+      const retsD = new Float64Array(Math.max(0, C.n - warm - 1));               /* [DR-81] block bootstrap of daily returns */
+      for (let i = warm + 1; i < C.n; i++) retsD[i - warm - 1] = r.equity[i] / r.equity[i - 1] - 1;
+      const mcB = BT.blockBootstrapEquity(retsD, 1000, 99);
       const regimeCls = Array.from(BT.regimeClasses(C));                         /* [DR-76] chart shading */
       self.postMessage({ id: m.id, ok: true, kind: 'run',
         equity: Array.from(r.equity), bench: Array.from(bench), trades: r.trades,
-        metrics: r.metrics, monthly, tear, regime, mc, regimeCls, warm,
+        metrics: r.metrics, monthly, tear, regime, mc, mcB, regimeCls, warm,
         benchTotal: bench[C.n - 1] / bench[warm] - 1,                             /* [DR-57] same window */
         benchFull: C.c[C.n - 1] / C.c[0] - 1 });                                  /* [DR-58] incl. warm-up, for context */
     } else if (m.cmd === 'sweep') {
       const t0 = performance.now();
       const split = m.splitPct ? Math.floor(m.bars.length * m.splitPct) : m.bars.length;   /* [DR-42] */
       const isBars = split < m.bars.length ? m.bars.slice(0, split) : m.bars;
-      const sw = BT.sweep(isBars, m.stratId, m.grids, Object.assign({}, m.opts, { rank: 'plateau', pboBlocks: 12 }),   /* [DR-72, DR-76] */
+      const sw = BT.sweep(isBars, m.stratId, m.grids, Object.assign({}, m.opts, { rank: 'plateau', pboBlocks: 12, keepRets: true }),   /* [DR-72, DR-76, DR-81] */
         (done, total) => self.postMessage({ id: m.id, kind: 'progress', done, total }));
       const pbo = sw.results.length >= 10 ? BT.pboCSCV(sw.results.map(r => r.blocks), 12) : null;   /* [DR-76] */
+      let spa = null, cpcv = null, mcs = null;                                   /* [DR-81] */
+      if (sw.results.length >= 10 && sw.results[0].rets) {
+        const Cw = BT.colsFromBars(isBars);
+        const w0 = Math.min(sw.commonWarm, Cw.n - 1);
+        const benchR = new Float64Array(Math.max(0, Cw.n - w0 - 1));
+        for (let i = w0 + 1; i < Cw.n; i++) benchR[i - w0 - 1] = Cw.c[i] / Cw.c[i - 1] - 1;
+        const pool = sw.results.slice(0, 400);                                   // SPA cost cap; plateau-ordered
+        spa = BT.spaTest(pool.map(r => r.rets), benchR, 250);
+        cpcv = BT.cpcvPaths(sw.results.map(r => r.blocks), 12, 2);
+        mcs = BT.mcsFromBlocks(sw.results.slice(0, 20).map(r => r.blocks), 12, 200, 0.10);
+      }
       let results = sw.results.slice(0, 100).map(r => ({ params: r.params, m: r.m, plateau: r.plateau, plateauN: r.plateauN, dom: r.dom }));
       if (split < m.bars.length) {                       // OOS pass with pre-window warm-up lead [DR-42, DR-47]
         results = results.map(r => {
@@ -1639,7 +2172,26 @@ self.onmessage = function (e) {
       const famStats = BT.familyStats(sw.results, skey).map(f => ({                /* [DR-72] fair per-class stats */
         type: f.type, n: f.n, median: f.median, bestRaw: f.bestRaw, eMax: f.eMax, deflated: f.deflated,
         maxDom: f.maxDom, bestParams: f.best.params, bestPlateau: f.best.plateau, bestDom: f.best.dom }));
-      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, famStats, benchM: sw.benchM, pbo, ms: performance.now() - t0 });
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, famStats, benchM: sw.benchM, pbo, spa, cpcv, mcs, ms: performance.now() - t0 });
+    } else if (m.cmd === 'folio') {                       /* [DR-80] allocator tournament */
+      const aligned = BT.alignCloses(m.list);
+      if (!aligned) throw new Error('need at least 2 assets with 200+ overlapping days');
+      const rows = [], equities = {};
+      let bench = null, warm = 0;
+      for (const alloc of ['ew', 'invvol', 'erc', 'rmm']) {
+        const r = BT.portfolio(aligned, Object.assign({}, m.cfg, { alloc }));
+        if (!r) throw new Error('not enough aligned history after warm-up');
+        rows.push({ alloc, m: r.metrics, turnover: r.turnover, rebalances: r.rebalances, wLast: r.wLast });
+        equities[alloc] = Array.from(r.equity);
+        bench = Array.from(r.bench); warm = r.warm;
+      }
+      self.postMessage({ id: m.id, ok: true, kind: 'folio', rows, equities, bench, warm, ts: aligned.ts, syms: aligned.syms });
+    } else if (m.cmd === 'lac') {                         /* [DR-79] lookahead certification */
+      const r = BT.lookaheadCheck(m.bars, m.stratId, m.params, m.filters, 20);
+      self.postMessage({ id: m.id, ok: true, kind: 'lac', r });
+    } else if (m.cmd === 'rec') {                         /* [DR-79] warm-up sensitivity */
+      const r = BT.recursiveCheck(m.bars, m.stratId, m.params, m.filters);
+      self.postMessage({ id: m.id, ok: true, kind: 'rec', r });
     } else if (m.cmd === 'tour') {                        /* [DR-72] per-family WFA, common windows */
       const t0 = performance.now();
       const nW = m.nWin || 5;
@@ -1677,7 +2229,7 @@ function workerCall(worker, payload, onProgress) {
 }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = { data: 'scr-data', strat: 'scr-strat', results: 'scr-results', sweep: 'scr-sweep', radar: 'scr-radar', set: 'scr-set' };
+const SCREENS = { data: 'scr-data', strat: 'scr-strat', results: 'scr-results', sweep: 'scr-sweep', radar: 'scr-radar', folio: 'scr-folio', set: 'scr-set' };
 function nav(name) {
   $$('.screen').forEach(s => s.classList.remove('active'));
   $('#' + SCREENS[name]).classList.add('active');
@@ -1955,6 +2507,7 @@ const STRAT_HINTS = {
   supert: 'In the market while SuperTrend (ATR bands with a ratchet) is bullish. Trend-following with a built-in volatility stop.',
   rsimr: 'Buys after sharp dips (RSI low), exits after recovery. Mean-reversion.',
   donch: 'Buys new highs, exits new lows. Breakout trend-following.',
+  aroonx: 'In the market while Aroon-Up (bars since the period high) dominates Aroon-Down. Trend-following that reacts to structure, not price averages. [DR-83]',
   macd: 'In the market while MACD momentum is positive.',
 };
 function fillStratSelect(sel) {
@@ -2035,6 +2588,9 @@ function currentOpts() {                                 /* shared by run + swee
     takeProfitPct: +$('#tpIn').value || 0,
     trailStopPct: +$('#trailIn').value || 0,
     maxDDStopPct: +$('#cbIn').value || 0,
+    protections: (+$('#pgN').value || 0) > 0
+      ? { slGuard: { nStops: +$('#pgN').value, lookback: +$('#pgLb').value || 30, lock: +$('#pgLock').value || 20 } }
+      : null,                                             /* [DR-82] */
     sizing: $('#sizeMode').value === 'atr'
       ? { mode: 'atr', riskPct: +$('#riskIn').value || 1, atrPeriod: +$('#atrPIn').value || 14, atrMult: +$('#atrMIn').value || 2 }
       : { mode: 'full' },                               /* [DR-53] */
@@ -2044,6 +2600,7 @@ function currentOpts() {                                 /* shared by run + swee
       if ($('#fAdxOn').classList.contains('on')) f.adx = { len: +$('#fAdxLen').value || 14, min: +$('#fAdxMin').value || 20 };
       if ($('#fLevelOn').classList.contains('on')) f.level = { type: $('#fLevelType').value || 'SMA', len: +$('#fLevelLen').value || 200 };  /* [DR-67] */
       if ($('#fVwapOn').classList.contains('on')) f.vwap = { len: +$('#fVwapLen').value || 50 };
+      if ($('#fBreadthOn').classList.contains('on')) f.breadth = { lookbacks: [20, 50, 100, 200], minFrac: +$('#fBreadthFrac').value || 0.5 };  /* [DR-83] */
       return Object.keys(f).length ? f : null;
     })(),
   };
@@ -2293,12 +2850,14 @@ function renderResults() {
         if (o.takeProfitPct) bits.push('TP ' + o.takeProfitPct + '%');
         if (o.trailStopPct) bits.push('TS ' + o.trailStopPct + '%');
         if (o.maxDDStopPct) bits.push('CB ' + o.maxDDStopPct + '%');
+        if (o.protections && o.protections.slGuard) bits.push('guard ' + o.protections.slGuard.nStops + '/' + o.protections.slGuard.lookback + '→' + o.protections.slGuard.lock);  /* [DR-82] */
         const ex = bits.length ? 'exits: ' + bits.join(' / ') : 'exits: none';
         const fl = o.filters ? ' · filters: ' + [
           o.filters.slope && `slope(${o.filters.slope.type || 'SMA'} ${o.filters.slope.len}/${o.filters.slope.k})`,
           o.filters.level && `level(c>${o.filters.level.type || 'SMA'}${o.filters.level.len})`,
           o.filters.adx && `ADX(${o.filters.adx.len})>${o.filters.adx.min}`,
           o.filters.vwap && `VWAP(${o.filters.vwap.len})`,
+          o.filters.breadth && `breadth(≥${Math.round(o.filters.breadth.minFrac * 4)}/4)`,
         ].filter(Boolean).join(' + ') : ' · filters: none';
         if (o.sizing && o.sizing.mode === 'atr') {
           const fr = R.res.trades.map(t => t.frac).filter(Number.isFinite);
@@ -2318,6 +2877,7 @@ function renderResults() {
     <h2>Risk &amp; trade stats</h2>
     <div class="mgrid">
       ${tile('Ann. vol', fmtPctU(m.annVol))}
+      ${tile('Smart Sharpe', fmtNum(m.smartSharpe), '', 'autocorrelation-penalized — the honest Sharpe [DR-79]')}
       ${tile('Sortino', fmtNum(m.sortino))}
       ${tile('Calmar', fmtNum(m.calmar))}
       ${tile('Exposure', fmtPctU(m.exposure, 0))}
@@ -2394,6 +2954,7 @@ function renderResults() {
         ${tile('P(loss)', fmtPctU(R.res.mc.probLoss, 1), R.res.mc.probLoss > 0.2 ? 'neg' : '', 'chance the same trades, reshuffled, lose money')}
       </div>
       <p class="hint">Your backtest is ONE ordering of these trades — resampling them with replacement asks how much of the headline number is sequencing luck. Trade-level resolution slightly understates intrabar drawdowns. [DR-76]</p>
+      ${R.res.mcB ? `<p class="hint" style="margin-top:6px"><b>Block bootstrap of daily returns</b> (preserves volatility clustering the trade shuffle destroys; block ≈ ${R.res.mcB.blockLen} bars, ${R.res.mcB.nSim.toLocaleString()}×): median ${fmtPct(R.res.mcB.ret.p50)} · 5–95% ${fmtPct(R.res.mcB.ret.p5)} … ${fmtPct(R.res.mcB.ret.p95)} · worst-5% max DD ${fmtPctU(R.res.mcB.dd.worst5)} · P(loss) ${fmtPctU(R.res.mcB.probLoss, 1)}. [DR-81]</p>` : ''}
     </div>` : ''}
     <h2>Top drawdowns</h2>
     <div class="card scrollx" style="padding:6px 10px">
@@ -2580,7 +3141,7 @@ async function runSweep() {
   let cancelled = false;
   $('#swCancelBtn').onclick = () => { cancelled = true; S.sweepWorker.terminate(); S.sweepWorker = null; endSweep(); $('#swStatus').textContent = 'Sweep cancelled — nothing was saved. Adjust ranges and run again.'; };
   function endSweep() { $('#swRunBtn').style.display = ''; $('#swCancelBtn').style.display = 'none'; $('#swProg').style.display = 'none'; }
-  const METRIC_LABEL = { ir: 'IR vs B&H', sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
+  const METRIC_LABEL = { ir: 'IR vs B&H', irp: 'IR (penalized)', sharpe: 'Sharpe', totalReturn: 'Return', cagr: 'CAGR', calmar: 'Calmar', sortino: 'Sortino' };
   const fmtM = (key, v) => v == null ? '—' : (key === 'totalReturn' || key === 'cagr') ? fmtPct(v) : fmtNum(v);
   try {
     if (valMode === 'tour') {                                                    /* [DR-72] class tournament */
@@ -2710,6 +3271,9 @@ async function runSweep() {
           return `<div class="hint" style="margin-top:6px">Selection-bias check: testing ${ts.n.toLocaleString()} combos, pure luck would be expected to yield a best in-sample ${lbl} of ~${expMax.toFixed(2)}. Your best is ${top.toFixed(2)} — ${v}. [DR-46, DR-62]</div>`;
         })()}
         ${res.pbo ? `<div class="hint" style="margin-top:6px">Overfitting probability (CSCV, ${res.pbo.nComb.toLocaleString()} train/test recombinations of ${res.pbo.nCfg} combos): <b>PBO ${(res.pbo.pbo * 100).toFixed(0)}%</b> — the chance this grid's in-sample winner lands below median out-of-sample. Guide: &lt;10% strong · 10–40% caution · &gt;40% mostly noise. [DR-76]</div>` : ''}
+        ${res.spa ? `<div class="hint" style="margin-top:6px"><b>SPA test</b> (Hansen; ${res.spa.m} variants, ${res.spa.B}× stationary block bootstrap, block ≈ ${res.spa.blockLen}): <b>p = ${(res.spa.p * 100).toFixed(1)}%</b> that the best combo's edge over B&amp;H is pure search luck. &lt;5% = real edge · &gt;20% = luck. [DR-81]</div>` : ''}
+        ${res.cpcv ? `<div class="hint" style="margin-top:6px"><b>CPCV</b>: ${res.cpcv.phi} full out-of-sample SELECTION paths (every train/test recombination picks its own winner) — median ${fmtPct(res.cpcv.median)}, range ${fmtPct(res.cpcv.min)} … ${fmtPct(res.cpcv.max)}, ${res.cpcv.distinctWinners} distinct winners. This is the distribution of what selecting from this grid actually delivers. [DR-81]</div>` : ''}
+        ${res.mcs ? `<div class="hint" style="margin-top:6px"><b>MCS≈90%</b>: ${res.mcs.size} of the top ${res.mcs.total} combos are statistically indistinguishable from the best — treat that whole set as the plateau, never a single row. [DR-81]</div>` : ''}
         <div class="row" style="margin-top:8px;flex-wrap:wrap">
           <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button">${filterOn ? `Showing only B&amp;H beaters` : 'Only B&H beaters'}</button>
           <button class="mini toggle${domOn ? ' on' : ''}" id="swDomF" type="button">${domOn ? `Showing only 5/5 dominant (${nDom})` : 'Only 5/5 dominant'}</button>
@@ -2765,6 +3329,49 @@ async function runSweep() {
   } catch (e) {
     if (!cancelled) { endSweep(); warn.innerHTML = `<div class="errline">✕ &nbsp;Sweep failed: ${e.message}</div>`; }
   }
+}
+
+/* ---------------- honesty checks [DR-79] ---------------- */
+async function lookaheadUI() {
+  const out = $('#honestyOut');
+  if (!validateParams()) { out.innerHTML = '<div class="errline">✕ &nbsp;Fix the strategy parameters first.</div>'; return; }
+  const cs = currentSetup();
+  const bars = fitBars();
+  out.innerHTML = '<div class="hint" style="margin-top:8px"><span class="spin"></span>&nbsp; Re-running signals with data truncated at each sampled signal bar…</div>';
+  try {
+    if (!S.worker) S.worker = makeWorker();
+    const res = await workerCall(S.worker, { cmd: 'lac', bars, stratId: cs.stratId, params: cs.params, filters: cs.opts.filters });
+    const r = res.r;
+    if (!r.checked) { out.innerHTML = '<div class="hint" style="margin-top:8px">No signal flips on this data — nothing to certify.</div>'; return; }
+    out.innerHTML = r.biased.length === 0
+      ? `<div class="okline">✓ &nbsp;<b>${r.reproduced}/${r.checked}</b> sampled signal flips (of ${r.totalSignals} total) reproduce EXACTLY when the data ends at the signal's own bar — no future leakage in this config. Signals are causal by construction [DR-10]; this certifies it end-to-end, filters included.</div>`
+      : `<div class="errline">✕ &nbsp;${r.biased.length} of ${r.checked} sampled signals CHANGED when future data was removed — future leakage at: ${r.biased.slice(0, 5).map(i => fmtDate(bars[i][0])).join(', ')}${r.biased.length > 5 ? '…' : ''}. Do not trust this backtest.</div>`;
+  } catch (e) { out.innerHTML = `<div class="errline">✕ &nbsp;Check failed: ${e.message}</div>`; }
+}
+async function recursiveUI() {
+  const out = $('#honestyOut');
+  if (!validateParams()) { out.innerHTML = '<div class="errline">✕ &nbsp;Fix the strategy parameters first.</div>'; return; }
+  const cs = currentSetup();
+  const bars = fitBars();
+  out.innerHTML = '<div class="hint" style="margin-top:8px"><span class="spin"></span>&nbsp; Recomputing indicators from limited warm-up depths…</div>';
+  try {
+    if (!S.worker) S.worker = makeWorker();
+    const res = await workerCall(S.worker, { cmd: 'rec', bars, stratId: cs.stratId, params: cs.params, filters: cs.opts.filters });
+    const rows = res.r.rows.filter(x => !x.na);
+    if (!rows.length) { out.innerHTML = '<div class="hint" style="margin-top:8px">Dataset shorter than every test depth — nothing to compare.</div>'; return; }
+    const safeRow = rows.find(x => x.sigSame && x.maxPct < 0.001);
+    out.innerHTML = `
+      <div class="card scrollx" style="background:var(--surface2);padding:6px 10px;margin-top:10px">
+      <table><thead><tr><th>History fetched</th><th>Last-bar signal</th><th>Max indicator variance</th></tr></thead>
+      <tbody>${rows.map(x => `
+        <tr><td>${x.depth} bars</td>
+        <td class="${x.sigSame ? 'pos' : 'neg'}">${x.sigSame ? 'matches ✓' : 'DIFFERS'}</td>
+        <td class="${x.maxPct < 0.001 ? 'pos' : (x.maxPct < 0.01 ? '' : 'neg')}">${(x.maxPct * 100).toFixed(3)}%</td></tr>`).join('')}</tbody></table>
+      </div>
+      <div class="${safeRow ? 'okline' : 'warnline'}">${safeRow
+        ? `✓ &nbsp;Fetch <b>≥ ${safeRow.depth} bars</b> and live signals match this backtest to &lt;0.1% (nominal warm-up: ${res.r.warmup} bars).`
+        : '⚠ &nbsp;No tested depth reproduces the backtest to <0.1% — recursive indicators (EMA-family) need more history than tested. Fetch maximum depth for live use.'}</div>`;
+  } catch (e) { out.innerHTML = `<div class="errline">✕ &nbsp;Check failed: ${e.message}</div>`; }
 }
 
 /* ---------------- robustness panel + config library [DR-77] ---------------- */
@@ -2994,7 +3601,10 @@ async function renderTrackList() {
           strategy <b class="${fwd.metrics.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(fwd.metrics.totalReturn)}</b>
           vs B&amp;H <span class="${fwd.bench >= 0 ? 'pos' : 'neg'}">${fmtPct(fwd.bench)}</span>
           (edge <b class="${edge >= 0 ? 'pos' : 'neg'}">${fmtPct(edge)}</b>${Number.isFinite(fwd.metrics.tExcess) ? ' · t ' + fmtNum(fwd.metrics.tExcess) : ''})
-          · now: ${stateBadge(st)} · data through ${dataThrough}</div>`;
+          · now: ${stateBadge(st)} · data through ${dataThrough}
+          ${Number.isFinite(fwd.metrics.minTRL) && edge > 0 ? (fwd.nBars >= fwd.metrics.minTRL && fwd.metrics.tExcess >= 1.65
+            ? ' · <b class="pos">record long enough for significance ✓</b>'
+            : ' · significance ETA ~' + Math.ceil(Math.max(0, fwd.metrics.minTRL - fwd.nBars)) + ' more bars at this edge [DR-79]') : ''}</div>`;
       }
     }
     cards.push(`
@@ -3048,6 +3658,8 @@ function applyFiltersToUI(filters) {                                            
   setTog('fAdxOn', 'ADX', filters && filters.adx);
   setTog('fVwapOn', 'VWAP', filters && filters.vwap);
   setTog('fLevelOn', 'Level', filters && filters.level);
+  setTog('fBreadthOn', 'Breadth', filters && filters.breadth);                   /* [DR-83] */
+  if (filters && filters.breadth) $('#fBreadthFrac').value = String(filters.breadth.minFrac || 0.5);
   if (filters && filters.slope) { $('#fSlopeType').value = filters.slope.type || 'SMA'; $('#fSlopeLen').value = filters.slope.len; $('#fSlopeK').value = filters.slope.k; }
   if (filters && filters.adx) { $('#fAdxLen').value = filters.adx.len; $('#fAdxMin').value = filters.adx.min; }
   if (filters && filters.vwap) { $('#fVwapLen').value = filters.vwap.len; }
@@ -3066,15 +3678,21 @@ async function discoverUniverse(exId, minVolUSD, maxN) {
     const all = await get('https://api.binance.com/api/v3/ticker/24hr');
     const lev = /(UP|DOWN|BULL|BEAR)USDT$/;                                      // leveraged tokens out
     const stable = /^(USDC|FDUSD|TUSD|BUSD|DAI|USDP|EUR|AEUR|EURI|XUSD|USD1)USDT$/;   // stables/fiat out
+    let spreads = null;                                                          /* [DR-82] bulk bid/ask for SpreadFilter */
+    try {
+      const bt = await get('https://api.binance.com/api/v3/ticker/bookTicker');
+      spreads = new Map(bt.filter(x => +x.askPrice > 0 && +x.bidPrice > 0).map(x => [x.symbol, (+x.askPrice - +x.bidPrice) / ((+x.askPrice + +x.bidPrice) / 2)]));
+    } catch (e) { spreads = null; }
     return all.filter(t => t.symbol && t.symbol.endsWith('USDT') && !lev.test(t.symbol) && !stable.test(t.symbol) && +t.quoteVolume >= minVolUSD)
       .sort((a, b) => +b.quoteVolume - +a.quoteVolume)
       .slice(0, maxN)
-      .map(t => ({ sym: t.symbol.slice(0, -4) + '/USDT', vol: +t.quoteVolume }));
+      .map(t => ({ sym: t.symbol.slice(0, -4) + '/USDT', vol: +t.quoteVolume, spread: spreads ? spreads.get(t.symbol) : null }));
   }
   if (exId === 'bitstamp') {
     const all = await get('https://www.bitstamp.net/api/v2/ticker/');
     return all.filter(t => t.pair && t.pair.endsWith('/USD'))
-      .map(t => ({ sym: t.pair, vol: (+t.volume || 0) * (+t.last || 0) }))
+      .map(t => ({ sym: t.pair, vol: (+t.volume || 0) * (+t.last || 0),
+                   spread: (+t.ask > 0 && +t.bid > 0) ? (+t.ask - +t.bid) / ((+t.ask + +t.bid) / 2) : null }))   /* [DR-82] */
       .filter(t => Number.isFinite(t.vol) && t.vol >= minVolUSD)
       .sort((a, b) => b.vol - a.vol)
       .slice(0, maxN);
@@ -3090,6 +3708,7 @@ async function runScan() {
   if (!profs.length) { status.innerHTML = '<div class="errline">✕ &nbsp;Pick at least one profile.</div>'; return; }
   const extra = $('#scExtra').value.split(',').map(s => normalizeSymbol(s)).filter(Boolean);
   let base = SC_UNIVERSE[exId], uniNote = 'curated majors';
+  let scanInfo = new Map();                                                      /* [DR-82] per-symbol vol/spread from discovery */
   if ($('#scUni').value === 'volume') {                                          /* [DR-78] */
     const minVol = (+$('#scMinVol').value || 25) * 1e6, maxN = Math.min(60, +$('#scMaxN').value || 30);
     status.innerHTML = '<span class="spin"></span>&nbsp; Discovering pairs above $' + (minVol / 1e6) + 'M 24h volume…';
@@ -3097,7 +3716,7 @@ async function runScan() {
       const disc = await discoverUniverse(exId, minVol, maxN);
       if (disc === null) { uniNote = 'curated majors (Coinbase has no bulk-volume endpoint)'; }
       else if (!disc.length) { status.innerHTML = '<div class="errline">✕ &nbsp;No pairs above the floor — lower the volume threshold.</div>'; return; }
-      else { base = disc.map(d => d.sym); uniNote = disc.length + ' pairs ≥ $' + (minVol / 1e6) + 'M 24h volume (by rank)'; }
+      else { base = disc.map(d => d.sym); scanInfo = new Map(disc.map(d => [d.sym, d])); uniNote = disc.length + ' pairs ≥ $' + (minVol / 1e6) + 'M 24h volume (by rank)'; }
     } catch (e) {
       status.innerHTML = `<div class="warnline">⚠ &nbsp;Volume discovery failed (${(e && e.cause) || 'ERROR'}) — falling back to curated majors.</div>`;
       await sleep(900);
@@ -3115,6 +3734,23 @@ async function runScan() {
       const res = await fetchREST(exId, syms[i], '1d', 500, null);
       const cleaned = BT.cleanBars(res.bars);
       if (cleaned.bars.length < 260) { errs.push(syms[i] + ' (young listing: ' + cleaned.bars.length + ' bars — needs 260+ for the gate)'); continue; }   /* [DR-78] */
+      /* quality + tradeability filters [DR-82] */
+      let sv = 0, sv2 = 0;
+      const c31 = cleaned.bars.slice(-31).map(b => b[4]);
+      for (let j = 1; j < c31.length; j++) { const lr = Math.log(c31[j] / c31[j - 1]); sv += lr; sv2 += lr * lr; }
+      const nR = c31.length - 1;
+      const sigD = Math.sqrt(Math.max(0, sv2 / nR - (sv / nR) * (sv / nR)));
+      const annVol = sigD * Math.sqrt(365);
+      const b90 = cleaned.bars.slice(-90);
+      const hi90 = Math.max(...b90.map(b => b[2])), lo90 = Math.min(...b90.map(b => b[3]));
+      const range90 = lo90 > 0 ? (hi90 - lo90) / lo90 : 0;
+      const inf = scanInfo.get(syms[i]) || {};
+      if (annVol < 0.10 || annVol > 3.0) { errs.push(syms[i] + ' (vol filter: ' + (annVol * 100).toFixed(0) + '%/yr)'); continue; }
+      if (range90 < 0.03) { errs.push(syms[i] + ' (stablecoin-like: 90d range ' + (range90 * 100).toFixed(1) + '%)'); continue; }
+      if (Number.isFinite(inf.spread) && inf.spread > 0.005) { errs.push(syms[i] + ' (spread ' + (inf.spread * 100).toFixed(2) + '%)'); continue; }
+      const V24 = Number.isFinite(inf.vol) ? inf.vol
+        : (() => { const xs = cleaned.bars.slice(-30).map(b => b[4] * b[5]).sort((a, b) => a - b); return xs[Math.floor(xs.length / 2)]; })();
+      const maxQ = (sigD > 1e-6 && Number.isFinite(V24) && V24 > 0) ? Math.pow(0.003 / sigD, 2) * V24 : null;   /* √-impact: k·σ·√(Q/V) ≤ 0.3%, k=1 */
       for (const p of profs) {
         const cfg = p.current ? currentSetup() : p;
         const filters = p.current ? cfg.opts.filters : p.filters;
@@ -3125,7 +3761,7 @@ async function runScan() {
           const o = BT.runOOS(cleaned.bars, from, cleaned.bars.length, cfg.stratId, cfg.params, { feePct: 0.1, capital: 10000, barsPerYear: 365, filters });
           yr = { ret: o.metrics.totalReturn, bench: o.bench };
         } catch (err) { /* not enough history for a fair year window */ }
-        rows.push({ sym: syms[i], prof: p.name, st, yr });
+        rows.push({ sym: syms[i], prof: p.name, st, yr, maxQ });
       }
     } catch (e) { errs.push(syms[i] + ' (' + ((e && e.cause) || 'ERROR') + ')'); }
   }
@@ -3136,7 +3772,7 @@ async function runScan() {
     `${rows.length} symbol×profile states · universe: ${uniNote}${errs.length ? ' · skipped: ' + errs.join(', ') : ''}. Fresh signals rank first, then near-gate setups, then held positions.`;
   $('#scResults').innerHTML = rows.length ? `
     <div class="card scrollx" style="padding:6px 10px">
-    <table><thead><tr><th>Symbol</th><th>Profile</th><th>Signal</th><th>Gate</th><th>Regime</th><th>1y vs B&amp;H</th></tr></thead>
+    <table><thead><tr><th>Symbol</th><th>Profile</th><th>Signal</th><th>Gate</th><th>Regime</th><th>1y vs B&amp;H</th><th>Max $</th></tr></thead>
     <tbody>${rows.map(r => `
       <tr>
         <td><b>${r.sym.split('/')[0]}</b></td>
@@ -3144,10 +3780,85 @@ async function runScan() {
         <td>${stateBadge(r.st)}</td>
         <td>${r.st.gate ? '<span class="' + (r.st.gate.above ? 'pos' : 'neg') + '">' + fmtPct(r.st.gate.dist) + '</span>' : '—'}</td>
         <td>${r.st.regime ? REGIME_TAG[r.st.regime] : '—'}</td>
-        <td>${r.yr ? '<span class="' + (r.yr.ret >= r.yr.bench ? 'pos' : 'neg') + '">' + fmtPct(r.yr.ret) + ' / ' + fmtPct(r.yr.bench) + '</span>' : '—'}</td></tr>`).join('')}</tbody></table>
+        <td>${r.yr ? '<span class="' + (r.yr.ret >= r.yr.bench ? 'pos' : 'neg') + '">' + fmtPct(r.yr.ret) + ' / ' + fmtPct(r.yr.bench) + '</span>' : '—'}</td>
+        <td>${Number.isFinite(r.maxQ) ? (r.maxQ >= 1e9 ? '$' + (r.maxQ / 1e9).toFixed(1) + 'B' : r.maxQ >= 1e6 ? '$' + (r.maxQ / 1e6).toFixed(1) + 'M' : '$' + (r.maxQ / 1e3).toFixed(0) + 'K') : '—'}</td></tr>`).join('')}</tbody></table>
     </div>
-    <p class="hint">Signal state is computed on ~500 fresh daily candles per symbol. “1y vs B&amp;H” is context, not validation — these profiles were validated on BTC/ETH only [DR-70, DR-72]; treat other symbols as HYPOTHESES until they build a forward record. A gate reading just below 0% is a watchlist candidate: one strong close could unblock entries. [DR-75]${syms.length > 15 ? ` <b>Multiple-comparisons caution:</b> across ${syms.length} symbols, expect ~${Math.max(1, Math.round(syms.length / 25))} fresh cross${Math.round(syms.length / 25) > 1 ? 'es' : ''} on a typical day from luck alone — a fresh signal in a wide scan is a research candidate, never a validated trade. [DR-78]` : ''}</p>` : '';
+    <p class="hint">Signal state is computed on ~500 fresh daily candles per symbol. “1y vs B&amp;H” is context, not validation — these profiles were validated on BTC/ETH only [DR-70, DR-72]; treat other symbols as HYPOTHESES until they build a forward record. A gate reading just below 0% is a watchlist candidate: one strong close could unblock entries. [DR-75] <b>Max $</b> = position size costing ≈0.3% in market impact (√-impact model k·σ·√(Q/V) against 24h volume) — beyond it, your own order moves the market; quality filters removed untradeable pairs (vol band, stablecoin-likes, spread &gt;0.5%). [DR-82]${syms.length > 15 ? ` <b>Multiple-comparisons caution:</b> across ${syms.length} symbols, expect ~${Math.max(1, Math.round(syms.length / 25))} fresh cross${Math.round(syms.length / 25) > 1 ? 'es' : ''} on a typical day from luck alone — a fresh signal in a wide scan is a research candidate, never a validated trade. [DR-78]` : ''}</p>` : '';
 }
+/* ---------------- Folio: allocator tournament [DR-80] ---------------- */
+const ALLOC_NAMES = { ew: 'Equal weight', invvol: 'Inverse volatility', erc: 'Equal risk (ERC)', rmm: 'Risk-managed momentum' };
+const ALLOC_COLORS = { ew: '--muted', invvol: '--s2', erc: '--warn', rmm: '--s1' };
+function renderFoSyms() {
+  const ex = $('#foExSel').value;
+  const syms = SC_UNIVERSE[ex];
+  $('#foSyms').innerHTML = syms.map((s, i) => `<button class="mini${i < 4 ? ' chip-on' : ''}" data-chip="${s}">${s.split('/')[0]}</button>`).join('');
+}
+function drawFolioChart(el, ts, equities, bench, warm) {
+  const chart = lwcMake(el);
+  const pack = (arr) => { const d = []; for (let i = warm; i < arr.length; i++) d.push({ time: Math.floor(ts[i] / 1000), value: arr[i] }); return d; };
+  const b = chart.addSeries(LightweightCharts.LineSeries, { color: css('--axis'), lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  b.setData(pack(bench));
+  for (const [alloc, eq] of Object.entries(equities)) {
+    const s = chart.addSeries(LightweightCharts.LineSeries, { color: css(ALLOC_COLORS[alloc]), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    s.setData(pack(eq));
+  }
+  chart.timeScale().fitContent();
+}
+async function runFolio() {
+  const status = $('#foStatus');
+  const exId = $('#foExSel').value;
+  const syms = $$('#foSyms .chip-on').map(b => b.dataset.chip);
+  if (syms.length < 2 || syms.length > 8) { status.innerHTML = '<div class="errline">✕ &nbsp;Pick between 2 and 8 coins.</div>'; return; }
+  $('#foRunBtn').disabled = true;
+  const list = [];
+  try {
+    for (let i = 0; i < syms.length; i++) {
+      status.innerHTML = `<span class="spin"></span>&nbsp; Fetching ${syms[i]} (${i + 1}/${syms.length})…`;
+      const res = await fetchREST(exId, syms[i], '1d', 1600, null);
+      const cleaned = BT.cleanBars(res.bars);
+      if (cleaned.bars.length < 200) throw new Error(syms[i] + ' has only ' + cleaned.bars.length + ' daily bars');
+      list.push({ sym: syms[i], bars: cleaned.bars });
+    }
+    status.innerHTML = '<span class="spin"></span>&nbsp; Running 4 allocators…';
+    const cfg = { feePct: +$('#feeIn').value || 0.1, capital: +$('#capIn').value || 10000,
+                  rebalanceEvery: +$('#foReb').value || 30, volTargetAnn: (+$('#foVolT').value || 30) / 100, momLB: +$('#foMom').value || 90 };
+    if (!S.worker) S.worker = makeWorker();
+    const res = await workerCall(S.worker, { cmd: 'folio', list, cfg });
+    const benchTotal = res.bench[res.bench.length - 1] / res.bench[res.warm] - 1;
+    const best = [...res.rows].sort((a, b) => b.m.ir - a.m.ir)[0];
+    status.innerHTML = `${res.syms.length} coins · ${res.ts.length - res.warm} aligned trading days (${fmtDate(res.ts[res.warm])} → ${fmtDate(res.ts[res.ts.length - 1])}) · rebalanced every ${cfg.rebalanceEvery} days · fee ${cfg.feePct}%/side on turnover.`;
+    $('#foResults').innerHTML = `
+      <div class="card" style="padding:12px 14px">
+        <b>1/N null (equal-weight buy &amp; hold):</b> <span class="${benchTotal >= 0 ? 'pos' : 'neg'}">${fmtPct(benchTotal)}</span>
+        <div class="hint">Best allocator by IR: <b>${ALLOC_NAMES[best.alloc]}</b>. Allocators are rule-based — no parameters were fitted to this data — so what you see is structure, not curve-fit. Judge on IR, drawdown and t; expect risk-managed momentum to win on drawdown, not always on raw return. [DR-80]</div>
+      </div>
+      <div class="card scrollx" style="padding:6px 10px">
+      <table><thead><tr><th>Allocator</th><th>Return</th><th>CAGR</th><th>Sharpe</th><th>Max DD</th><th>IR vs 1/N</th><th>t</th><th>Turnover</th></tr></thead>
+      <tbody>${res.rows.map(r => `
+        <tr>
+          <td><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(${ALLOC_COLORS[r.alloc]});margin-right:6px"></span><b>${ALLOC_NAMES[r.alloc]}</b></td>
+          <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}${r.m.totalReturn > benchTotal ? ' ✓' : ''}</td>
+          <td>${fmtPct(r.m.cagr)}</td>
+          <td>${fmtNum(r.m.sharpe)}</td>
+          <td class="neg">${fmtPctU(r.m.maxDrawdown)}</td>
+          <td>${fmtNum(r.m.ir)}</td>
+          <td>${fmtNum(r.m.tExcess)}${r.m.tExcess >= 1.65 ? '<b class="pos">*</b>' : ''}</td>
+          <td>${(r.turnover * 100).toFixed(0)}%</td></tr>`).join('')}</tbody></table>
+      </div>
+      <h2>Equity — allocators vs 1/N buy &amp; hold (dashed)</h2>
+      <div class="legend">${res.rows.map(r => `<span><span class="sw" style="background:var(${ALLOC_COLORS[r.alloc]})"></span>${ALLOC_NAMES[r.alloc]}</span>`).join('')}<span><span class="sw" style="background:var(--axis)"></span>1/N B&amp;H</span></div>
+      <div class="lwc" id="foChart"></div>
+      <div class="card" style="margin-top:12px;padding:12px 14px">
+        <b>Current ${ALLOC_NAMES[best.alloc]} weights</b> <span class="note">(last rebalance target)</span>
+        <div class="hint">${res.syms.map((s, i) => `${s.split('/')[0]} ${(best.wLast[i] * 100).toFixed(0)}%`).join(' · ')}${best.wLast.reduce((a, b) => a + b, 0) < 0.995 ? ' · cash ' + ((1 - best.wLast.reduce((a, b) => a + b, 0)) * 100).toFixed(0) + '%' : ''}</div>
+        <p class="hint">IR and t are measured against the 1/N null over the identical window — the honest portfolio benchmark [DR-80]. * = t ≥ 1.65.</p>
+      </div>`;
+    drawFolioChart($('#foChart'), res.ts, res.equities, res.bench, res.warm);
+  } catch (e) {
+    status.innerHTML = `<div class="errline">✕ &nbsp;${e.message || e}${(e && e.cause) ? ' (' + e.cause + ')' : ''}</div>`;
+  } finally { $('#foRunBtn').disabled = false; }
+}
+
 /* ---------------- settings: self-test [DR-37], proxy, data mgmt ---------------- */
 async function selfTest() {
   const out = $('#selfTestOut');
@@ -3243,7 +3954,7 @@ async function boot() {
   $('#stressBtn').onclick = eraStressTest;
   updateFitFromRef();
 
-  for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP'], ['fLevelOn', 'Level']]) {   /* [DR-56, DR-67] */
+  for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP'], ['fLevelOn', 'Level'], ['fBreadthOn', 'Breadth']]) {   /* [DR-56, DR-67, DR-83] */
     $('#' + id).onclick = () => {
       const b = $('#' + id);
       b.classList.toggle('on');
@@ -3255,6 +3966,11 @@ async function boot() {
   $('#scRunBtn').onclick = runScan;
   $('#scUni').onchange = () => { $('#scVolBox').style.display = $('#scUni').value === 'volume' ? '' : 'none'; };   /* [DR-78] */
   $('#robustBtn').onclick = robustnessCheck;                                     /* [DR-77] */
+  $('#lacBtn').onclick = lookaheadUI;                                            /* [DR-79] */
+  $('#recBtn').onclick = recursiveUI;
+  renderFoSyms();                                                                /* [DR-80] */
+  $('#foExSel').onchange = renderFoSyms;
+  $('#foRunBtn').onclick = runFolio;
   $('#libSaveBtn').onclick = libSave;
   $('#libExpBtn').onclick = libExport;
   $('#libImpBtn').onclick = () => $('#libImpInp').click();
