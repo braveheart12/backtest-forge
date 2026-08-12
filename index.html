@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.5</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.7</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -314,6 +314,37 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <div id="swResults"></div>
 </section>
 
+<!-- ================= RADAR [DR-75] ================= -->
+<section class="screen" id="scr-radar">
+  <h2>Today — current setup</h2>
+  <div class="card" id="todayCard">
+    <div class="hint">Pick a dataset and strategy first.</div>
+  </div>
+  <h2>Screener — validated profiles across symbols</h2>
+  <div class="card">
+    <label class="f">Exchange</label>
+    <select id="scExSel">
+      <option value="binance" selected>Binance (USDT majors)</option>
+      <option value="coinbase">Coinbase (USD majors)</option>
+      <option value="bitstamp">Bitstamp (USD majors)</option>
+    </select>
+    <label class="f">Extra symbols (optional, comma-separated)</label>
+    <input type="text" id="scExtra" placeholder="e.g. ARB/USDT, OP/USDT" autocapitalize="characters">
+    <label class="f">Profiles to scan</label>
+    <div class="row chips" id="scProfiles"></div>
+    <div class="hint">BTC-style = MA-cross 20/90 + Faber SMA-200 entry gate (the DR-70-validated family). ETH-style = de-lagged HMA 25/125, no gate (DR-59/72). Current = whatever the Strategy tab is set to right now.</div>
+    <button class="btn" id="scRunBtn">Scan symbols</button>
+    <button class="btn danger" id="scCancelBtn" style="display:none">Cancel scan</button>
+    <div class="hint" id="scStatus"></div>
+  </div>
+  <div id="scResults"></div>
+  <h2>Forward track record</h2>
+  <div class="card">
+    <div class="hint">Freeze a config here and the app builds its genuinely out-of-sample track record from that day forward — the only test that can never be overfit. Freeze from the Today card above; refresh data to extend the record. [DR-75]</div>
+  </div>
+  <div id="trackList"></div>
+</section>
+
 <!-- ================= SETTINGS ================= -->
 <section class="screen" id="scr-set">
   <h2>Connectivity</h2>
@@ -341,7 +372,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.5</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.7</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -350,6 +381,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4.5M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
 </div>
@@ -383,6 +415,12 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return { n, ts, o, h, l, c, v };
   }
   BT.colsFromBars = colsFromBars;
+  // Category key of a param set = all non-numeric params joined (MA type, GMMA rule, …).
+  // Used to slice plateau neighborhoods / families so categories never mix. [DR-72, DR-74]
+  function catOf(params) {
+    return Object.keys(params).filter(k => typeof params[k] !== 'number').map(k => params[k]).join('~');
+  }
+  BT.catOf = catOf;
 
   BT.barsPerYear = function (tfSeconds) { return 31536000 / tfSeconds; }; // [DR-05]
   BT.TF_SECONDS = { '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };   // [DR-14]
@@ -591,6 +629,26 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return { macd, sigLine };
   }
 
+  /* Guppy MMA ribbons: classic trader group 3/5/8/10/12/15, investor group 30/35/40/45/50/60,
+     each scalable by percent. Returns group averages + min(short)/max(long) for separation tests. [DR-74] */
+  const GUPPY_S = [3, 5, 8, 10, 12, 15], GUPPY_L = [30, 35, 40, 45, 50, 60];
+  function gmmaLines(C, p) {
+    const sS = (p.shortPct || 100) / 100, sL = (p.longPct || 100) / 100, n = C.n;
+    const shorts = GUPPY_S.map(b => ema(C.c, Math.max(2, Math.round(b * sS))));
+    const longs = GUPPY_L.map(b => ema(C.c, Math.max(3, Math.round(b * sL))));
+    const avgS = new Float64Array(n).fill(NaN), avgL = new Float64Array(n).fill(NaN);
+    const minS = new Float64Array(n).fill(NaN), maxL = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) {
+      let aS = 0, okS = true, mS = Infinity;
+      for (const e of shorts) { const v = e[i]; if (!isFinite(v)) { okS = false; break; } aS += v; if (v < mS) mS = v; }
+      if (okS) { avgS[i] = aS / 6; minS[i] = mS; }
+      let aL = 0, okL = true, xL = -Infinity;
+      for (const e of longs) { const v = e[i]; if (!isFinite(v)) { okL = false; break; } aL += v; if (v > xL) xL = v; }
+      if (okL) { avgL[i] = aL / 6; maxL[i] = xL; }
+    }
+    return { avgS, avgL, minS, maxL };
+  }
+
   /* ---------- strategies [DR-30, DR-31] ---------- */
   // signals(colsOrBars, params) -> Int8Array; signals[t] uses data <= t only (causal).
   const STRATS = [
@@ -611,6 +669,31 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
         { label: `${p.type} ${p.fast}`, role: 0, data: maOf(p.type, C, p.fast) },
         { label: `${p.type} ${p.slow}`, role: 1, data: maOf(p.type, C, p.slow) },
       ] }) },
+
+    { id: 'gmma', name: 'GMMA (Guppy)',                  /* [DR-74] 12-EMA ribbon system */
+      params: [{ key: 'rule', label: 'Entry rule', type: 'select', options: ['AVG', 'SEP'], def: 'AVG' },
+               { key: 'shortPct', label: 'Short ribbon scale %', def: 100, min: 40, max: 250, step: 10 },
+               { key: 'longPct', label: 'Long ribbon scale %', def: 100, min: 40, max: 250, step: 10 }],
+      warmup: (p) => Math.ceil(60 * ((p.longPct || 100) / 100)) + 10,
+      signals: (C, p) => {
+        const g = gmmaLines(C, p), out = new Int8Array(C.n);
+        let pos = 0;
+        for (let i = 0; i < C.n; i++) {
+          if (!isFinite(g.avgS[i]) || !isFinite(g.avgL[i])) { pos = 0; out[i] = 0; continue; }
+          if (p.rule === 'SEP') {                        // enter on FULL bullish separation, exit on group-average cross-down
+            if (pos === 0 && g.minS[i] > g.maxL[i]) pos = 1;
+            else if (pos === 1 && g.avgS[i] < g.avgL[i]) pos = 0;
+          } else {                                       // AVG: in market while short-group average > long-group average
+            pos = g.avgS[i] > g.avgL[i] ? 1 : 0;
+          }
+          out[i] = pos;
+        }
+        return out;
+      },
+      overlays: (C, p) => { const g = gmmaLines(C, p); return { price: [
+        { label: 'Short ribbon avg', role: 0, data: g.avgS },
+        { label: 'Long ribbon avg', role: 1, data: g.avgL },
+      ] }; } },
 
     { id: 'bbmr', name: 'Bollinger Mean-Rev',            /* [DR-53] buy < lower, exit > middle */
       params: [{ key: 'period', label: 'BB period', def: 20, min: 5, max: 100, step: 1 },
@@ -1047,7 +1130,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const numKeys = Object.keys(results[0].params).filter(k => typeof results[0].params[k] === 'number');
     if (numKeys.length !== 2) { for (const r of results) { r.plateau = r.m[sortKey]; r.plateauN = 1; } return results; }
     const [ka, kb] = numKeys;
-    const byKey = new Map(results.map(r => [`${r.params.type || ''}|${r.params[ka]}|${r.params[kb]}`, r.m[sortKey]]));
+    const byKey = new Map(results.map(r => [`${catOf(r.params)}|${r.params[ka]}|${r.params[kb]}`, r.m[sortKey]]));   /* [DR-74] category-sliced */
     const as = [...new Set(results.map(r => r.params[ka]))].sort((x, y) => x - y);
     const bs = [...new Set(results.map(r => r.params[kb]))].sort((x, y) => x - y);
     const ai = new Map(as.map((v, i) => [v, i])), bi = new Map(bs.map((v, i) => [v, i]));
@@ -1057,7 +1140,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) {
         const a = as[a0 + da], b = bs[b0 + db];
         if (a === undefined || b === undefined) continue;
-        const v = byKey.get(`${r.params.type || ''}|${a}|${b}`);
+        const v = byKey.get(`${catOf(r.params)}|${a}|${b}`);
         if (Number.isFinite(v)) vals.push(v);
       }
       vals.sort((x, y) => x - y);
@@ -1082,7 +1165,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   BT.familyStats = function (results, sortKey) {
     const fams = new Map();
     for (const r of results) {
-      const t = r.params.type || 'ALL';
+      const t = catOf(r.params) || 'ALL';                                        /* [DR-74] any categorical param */
       if (!fams.has(t)) fams.set(t, []);
       fams.get(t).push(r);
     }
@@ -1110,13 +1193,14 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   BT.tournament = function (bars, stratId, grids, opts, nWin, onProg) {
     nWin = nWin || 5;
     const n = bars.length;
-    const types = grids.type || [null];
+    const catName = Object.keys(grids).find(k => typeof grids[k][0] !== 'number');   /* [DR-74] MA type, GMMA rule, … */
+    const types = catName ? grids[catName] : [null];
     const gw = BT.gridWarmup(stratId, grids, opts);
     const start = Math.min(Math.max(Math.floor(n * 0.25), gw + 250), Math.floor(n * 0.6));  /* [DR-60] */
     const rows = [];
     for (let i = 0; i < types.length; i++) {
       const t = types[i];
-      const g = t ? { ...grids, type: [t] } : grids;
+      const g = t ? { ...grids, [catName]: [t] } : grids;
       const wf = BT.walkForward(bars, stratId, g, opts, nWin, (start + 0.1) / n,
         onProg ? (w) => onProg(i, types.length, w) : null);
       const wins = wf.windows.filter(Boolean);
@@ -1162,7 +1246,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const numKeys = Object.keys(results[0].params).filter(k => typeof results[0].params[k] === 'number');
     if (numKeys.length !== 2) return results[0];                                 // fallback: argmax
     const [ka, kb] = numKeys;
-    const byKey = new Map(results.map(r => [`${r.params.type || ''}|${r.params[ka]}|${r.params[kb]}`, r.m[sortKey]]));
+    const byKey = new Map(results.map(r => [`${catOf(r.params)}|${r.params[ka]}|${r.params[kb]}`, r.m[sortKey]]));   /* [DR-74] category-sliced */
     const as = [...new Set(results.map(r => r.params[ka]))].sort((x, y) => x - y);
     const bs = [...new Set(results.map(r => r.params[kb]))].sort((x, y) => x - y);
     const ai = new Map(as.map((v, i) => [v, i])), bi = new Map(bs.map((v, i) => [v, i]));
@@ -1173,7 +1257,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) {
         const a = as[a0 + da], b = bs[b0 + db];
         if (a === undefined || b === undefined) continue;
-        const v = byKey.get(`${r.params.type || ''}|${a}|${b}`);
+        const v = byKey.get(`${catOf(r.params)}|${a}|${b}`);
         if (Number.isFinite(v)) vals.push(v);
       }
       if (vals.length < 4) continue;                                             // starved edge neighborhoods
@@ -1215,6 +1299,44 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     const sets = new Set(windows.filter(Boolean).map(w => JSON.stringify(w.params)));
     return { windows, stitched: stitched - 1, stitchedBench: stitchedBench - 1, distinctParams: sets.size, nWin, start, segLen, oosFrac: (n - start) / n };
+  };
+
+  /* ---------- signal state + forward tracking [DR-75] ---------- */
+  // What is this config saying RIGHT NOW on this data? (position, freshness, gate, regime)
+  BT.signalState = function (bars, stratId, params, filters) {
+    const C = bars.n ? bars : colsFromBars(bars);
+    const strat = BT.strategy(stratId);
+    const sig = BT.applyFilters(C, strat.signals(C, params), filters);
+    const n = C.n;
+    if (n < 2) return null;
+    const pos = sig[n - 1];
+    let lastChange = n - 1;
+    while (lastChange > 0 && sig[lastChange - 1] === pos) lastChange--;
+    const barsSince = n - 1 - lastChange;                    // bars since current state began
+    const action = sig[n - 1] !== sig[n - 2] ? (pos ? 'BUY' : 'SELL') : null;   // fires at next open [DR-10]
+    let gate = null;
+    if (filters && filters.level) {
+      const ma = maOf(filters.level.type || 'SMA', C, filters.level.len);
+      if (isFinite(ma[n - 1])) gate = { dist: C.c[n - 1] / ma[n - 1] - 1, above: C.c[n - 1] > ma[n - 1] };
+    }
+    let regime = null;                                       // DR-62 classifier at the last bar
+    if (n >= 260) {
+      const s200 = sma(C.c, 200);
+      if (isFinite(s200[n - 1]) && isFinite(s200[n - 21])) {
+        const rising = s200[n - 1] > s200[n - 21], above = C.c[n - 1] > s200[n - 1];
+        regime = (above && rising) ? 'bull' : (!above && !rising) ? 'bear' : 'chop';
+      }
+    }
+    return { pos, barsSince, action, gate, regime, lastClose: C.c[n - 1], lastTs: C.ts[n - 1] };
+  };
+  // Since-freeze forward performance: strictly-after-freeze window, warm-up lead taken
+  // from BEFORE the freeze (runOOS discipline) — genuinely out-of-sample by construction.
+  BT.forwardRun = function (bars, freezeTs, stratId, params, opts) {
+    let from = 0;
+    while (from < bars.length && bars[from][0] <= freezeTs) from++;
+    if (from >= bars.length || from < 1) return null;         // no bars after freeze yet
+    const r = BT.runOOS(bars, from, bars.length, stratId, params, opts);
+    return { metrics: r.metrics, bench: r.bench, nBars: bars.length - from, fromTs: bars[from][0] };
   };
 
   /* ---------- deterministic demo data [DR-22] ---------- */
@@ -1362,8 +1484,9 @@ self.onmessage = function (e) {
       let heat = null;
       const numKeys = Object.keys(m.grids).filter(k => typeof m.grids[k][0] === 'number');
       if (numKeys.length === 2) {
-        heat = { axes: numKeys, sortKey: m.opts.sortKey || 'sharpe',
-                 cells: sw.results.map(r => [r.params.type || '', r.params[numKeys[0]], r.params[numKeys[1]], r.m[m.opts.sortKey || 'sharpe']]) };
+        const catKey = Object.keys(m.grids).find(k => typeof m.grids[k][0] !== 'number') || null;   /* [DR-74] type, rule, … */
+        heat = { axes: numKeys, catKey, sortKey: m.opts.sortKey || 'sharpe',
+                 cells: sw.results.map(r => [(catKey && r.params[catKey]) || '', r.params[numKeys[0]], r.params[numKeys[1]], r.m[m.opts.sortKey || 'sharpe']]) };
       }
       const famStats = BT.familyStats(sw.results, skey).map(f => ({                /* [DR-72] fair per-class stats */
         type: f.type, n: f.n, median: f.median, bestRaw: f.bestRaw, eMax: f.eMax, deflated: f.deflated,
@@ -1406,13 +1529,14 @@ function workerCall(worker, payload, onProgress) {
 }
 
 /* ---------------- navigation ---------------- */
-const SCREENS = { data: 'scr-data', strat: 'scr-strat', results: 'scr-results', sweep: 'scr-sweep', set: 'scr-set' };
+const SCREENS = { data: 'scr-data', strat: 'scr-strat', results: 'scr-results', sweep: 'scr-sweep', radar: 'scr-radar', set: 'scr-set' };
 function nav(name) {
   $$('.screen').forEach(s => s.classList.remove('active'));
   $('#' + SCREENS[name]).classList.add('active');
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.nav === name));
   window.scrollTo(0, 0);
   if (name === 'strat' || name === 'sweep') refreshDsBanners();
+  if (name === 'radar') { renderToday(); renderTrackList(); }                    /* [DR-75] */
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-nav]');
@@ -1678,6 +1802,7 @@ async function renderDsList() {
 const STRAT_HINTS = {
   buyhold: 'Buys at the start and holds. The baseline everything else must beat.',
   macross: 'In the market while the fast average is above the slow one. Pick from 12 MA types — SMA is the classic; HMA/TEMA/ALMA react faster, RMA/KAMA are smoother, GMA is a conservative SMA variant.',
+  gmma: 'Guppy Multiple MA: 6 fast EMAs (traders) vs 6 slow EMAs (investors). AVG = in market while the fast group average is above the slow group average; SEP = enter only on FULL ribbon separation (stricter), exit on average cross-down. Scale % stretches each ribbon.',
   bbmr: 'Buys when price closes below the lower Bollinger band, exits above the middle band. Mean-reversion — buys panic, sells normality.',
   supert: 'In the market while SuperTrend (ATR bands with a ratchet) is bullish. Trend-following with a built-in volatility stop.',
   rsimr: 'Buys after sharp dips (RSI low), exits after recovery. Mean-reversion.',
@@ -2167,7 +2292,7 @@ function drawHeatmap(res, stratId, lbl) {
       if (cix < 0 || cix >= xs.length || r < 0 || r >= ys.length) return;
       if (!val.has(ys[r] + '|' + xs[cix])) return;
       const p = { [axes[0]]: ys[r], [axes[1]]: xs[cix] };
-      if (curType) p.type = curType;
+      if (curType) p[res.heat.catKey || 'type'] = curType;                       /* [DR-74] */
       loadParamsIntoStrategy(stratId, p, `Heatmap cell (${lbl} ${fmtNum(val.get(ys[r] + '|' + xs[cix]))})`);
     };
   };
@@ -2187,8 +2312,9 @@ function renderSweepBox() {
   const box = $('#swBox'); box.innerHTML = '';
   if (!s.params.length) { box.innerHTML = '<p class="hint">Buy &amp; Hold has no parameters to sweep — pick another strategy.</p>'; return; }
   for (const p of s.params) {
-    if (p.type === 'select') {                                                   /* [DR-40] sweep across MA types */
-      const defaultOn = ['SMA', 'EMA', 'WMA', 'HMA'];
+    if (p.type === 'select') {                                                   /* [DR-40] sweep across MA types / rules */
+      const maDefaults = ['SMA', 'EMA', 'WMA', 'HMA'];
+      const defaultOn = p.options.some(o => maDefaults.includes(o)) ? maDefaults : p.options;   /* [DR-74] small option sets: all on */
       box.insertAdjacentHTML('beforeend', `
         <label class="f">${p.label} — include in sweep</label>
         <div class="row chips" data-swsel="${p.key}">${p.options.map(o =>
@@ -2427,6 +2553,201 @@ async function runSweep() {
   }
 }
 
+/* ---------------- Radar: today panel + screener + forward tracker [DR-75] ---------------- */
+const SCAN_PROFILES = [
+  { id: 'btcstyle', name: 'BTC-style', desc: 'MA 20/90 + Faber SMA200', stratId: 'macross', params: { type: 'SMA', fast: 20, slow: 90 }, filters: { level: { type: 'SMA', len: 200 } } },  /* [DR-70] */
+  { id: 'ethstyle', name: 'ETH-style', desc: 'HMA 25/125, no gate', stratId: 'macross', params: { type: 'HMA', fast: 25, slow: 125 }, filters: null },   /* [DR-59, DR-72] */
+  { id: 'current', name: 'Current setup', desc: 'from the Strategy tab', current: true },
+];
+const SC_UNIVERSE = {                                                            /* curated majors; extend via the extra-symbols box */
+  binance: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'LTC/USDT', 'TON/USDT'],
+  coinbase: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'DOGE/USD', 'ADA/USD', 'AVAX/USD', 'LINK/USD', 'LTC/USD'],
+  bitstamp: ['BTC/USD', 'ETH/USD', 'XRP/USD', 'SOL/USD', 'LTC/USD', 'ADA/USD', 'LINK/USD'],
+};
+const REGIME_TAG = { bull: '🟢 bull', chop: '🟡 chop', bear: '🔴 bear' };
+function currentSetup() {
+  return { stratId: $('#stratSel').value, params: readParams($('#paramBox')), opts: currentOpts() };
+}
+function stateBadge(st) {
+  if (!st) return '—';
+  if (st.action === 'BUY') return '<b class="pos">🟢 BUY at next open</b>';
+  if (st.action === 'SELL') return '<b class="neg">🔴 SELL at next open</b>';
+  return st.pos ? `<b class="pos">IN</b> <span class="note">(${st.barsSince} bars)</span>` : `<b>OUT</b> <span class="note">(${st.barsSince} bars)</span>`;
+}
+function renderToday() {
+  const el = $('#todayCard');
+  if (!S.bars || S.bars.length < 60) { el.innerHTML = '<div class="hint">Pick a dataset and strategy first.</div>'; return; }
+  const cs = currentSetup();
+  let st = null;
+  try { st = BT.signalState(fitBars(), cs.stratId, cs.params, cs.opts.filters); } catch (e) { /* invalid params */ }
+  if (!st) { el.innerHTML = '<div class="hint">Set valid strategy parameters on the Strategy tab first.</div>'; return; }
+  const stratName = BT.strategy(cs.stratId).name;
+  const pTxt = Object.entries(cs.params).map(([k, v]) => v).join('/');
+  const staleMs = Date.now() - st.lastTs;
+  const stale = staleMs > 2 * TF_MS[S.meta.tf];
+  el.innerHTML = `
+    <b>${stratName} ${pTxt}</b> <span class="note">on ${S.meta.demo ? 'DEMO ' : ''}${S.meta.symbol} ${S.meta.tf}${cs.opts.filters && cs.opts.filters.level ? ' · Faber ' + (cs.opts.filters.level.type || 'SMA') + cs.opts.filters.level.len : ''}</span>
+    <div style="margin-top:8px;font-size:15px">${stateBadge(st)}</div>
+    <div class="hint" style="margin-top:6px">
+      ${st.action ? 'The signal flipped on the last close — the engine would act at the NEXT bar open [DR-10].' : (st.pos ? 'Position held since ' + st.barsSince + ' bars.' : 'Flat for ' + st.barsSince + ' bars.')}
+      ${st.gate ? ' · Price ' + (st.gate.above ? '<b class="pos">' + fmtPct(st.gate.dist) + ' above</b>' : '<b class="neg">' + fmtPct(st.gate.dist) + ' below</b>') + ' the entry gate' + (st.gate.above ? '' : ' — new entries blocked [DR-67]') : ''}
+      ${st.regime ? ' · Regime: ' + REGIME_TAG[st.regime] : ''}
+    </div>
+    <div class="hint">Data through ${fmtDate(st.lastTs)}.${stale ? ' <b style="color:var(--warn)">Stale — re-fetch on the Data tab for today’s signal.</b>' : ''}</div>
+    <button class="btn ghost" id="trackBtn" style="margin-top:10px">Freeze &amp; track this config from today</button>
+    <div class="hint">Freezing starts a forward out-of-sample record: no re-fitting, no hindsight — the strongest evidence this app can produce. [DR-75]</div>`;
+  $('#trackBtn').onclick = trackCurrent;
+}
+async function trackCurrent() {
+  const cs = currentSetup();
+  const list = (await DB.get('settings', 'tracked')) || [];
+  const o = cs.opts;
+  list.push({
+    id: 'trk' + Date.now(), createdAt: Date.now(), freezeTs: S.bars[S.bars.length - 1][0],
+    dsKey: S.selectedKey, meta: { ...S.meta }, stratId: cs.stratId, params: cs.params,
+    opts: { feePct: o.feePct, slipPct: o.slipPct, capital: o.capital, barsPerYear: o.barsPerYear,
+            stopLossPct: o.stopLossPct, takeProfitPct: o.takeProfitPct, trailStopPct: o.trailStopPct,
+            maxDDStopPct: o.maxDDStopPct, sizing: o.sizing, filters: o.filters },
+  });
+  await DB.put('settings', 'tracked', list);
+  renderTrackList();
+  $('#trackBtn').textContent = 'Frozen ✓ — see the track record below';
+}
+async function renderTrackList() {
+  const box = $('#trackList');
+  const list = (await DB.get('settings', 'tracked')) || [];
+  if (!list.length) { box.innerHTML = '<div class="empty"><p>Nothing frozen yet.</p></div>'; return; }
+  const cards = [];
+  for (const e of list) {
+    const rec = await DB.get('datasets', e.dsKey);
+    const stratName = BT.strategy(e.stratId).name;
+    const pTxt = Object.entries(e.params).map(([k, v]) => v).join('/');
+    let body;
+    if (!rec) body = '<div class="errline">✕ &nbsp;Dataset was deleted — re-fetch it on the Data tab (same exchange/symbol/timeframe) to resume.</div>';
+    else {
+      const fwd = BT.forwardRun(rec.bars, e.freezeTs, e.stratId, e.params, e.opts);
+      const st = BT.signalState(rec.bars, e.stratId, e.params, e.opts.filters);
+      const dataThrough = fmtDate(rec.bars[rec.bars.length - 1][0]);
+      if (!fwd) body = `<div class="hint">Frozen at the last bar — no new bars yet (data through ${dataThrough}). Tap Refresh to extend.</div>`;
+      else {
+        const edge = fwd.metrics.totalReturn - fwd.bench;
+        body = `
+          <div class="hint" style="margin-top:6px"><b>${fwd.nBars} bars</b> of true out-of-sample since freeze:
+          strategy <b class="${fwd.metrics.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(fwd.metrics.totalReturn)}</b>
+          vs B&amp;H <span class="${fwd.bench >= 0 ? 'pos' : 'neg'}">${fmtPct(fwd.bench)}</span>
+          (edge <b class="${edge >= 0 ? 'pos' : 'neg'}">${fmtPct(edge)}</b>${Number.isFinite(fwd.metrics.tExcess) ? ' · t ' + fmtNum(fwd.metrics.tExcess) : ''})
+          · now: ${stateBadge(st)} · data through ${dataThrough}</div>`;
+      }
+    }
+    cards.push(`
+      <div class="card" data-trk="${e.id}">
+        <b>${stratName} ${pTxt}</b> <span class="note">on ${e.meta.symbol} ${e.meta.tf}${e.opts.filters && e.opts.filters.level ? ' · Faber ' + (e.opts.filters.level.type || 'SMA') + e.opts.filters.level.len : ''}</span>
+        <div class="hint">Frozen ${fmtDate(e.freezeTs)} (${e.meta.demo ? 'DEMO data — engine drill only' : (EXCHANGES[e.meta.exchange] ? EXCHANGES[e.meta.exchange].name : e.meta.exchange)})</div>
+        ${body}
+        <div class="row" style="margin-top:8px">
+          <button class="mini" data-tact="refresh">Refresh data</button>
+          <button class="mini" data-tact="load">Load into Strategy</button>
+          <button class="mini" data-tact="del">✕ Remove</button>
+        </div>
+      </div>`);
+  }
+  box.innerHTML = cards.join('');
+  $$('#trackList [data-tact]').forEach(btn => btn.onclick = () => trackAction(btn.closest('[data-trk]').dataset.trk, btn.dataset.tact, btn));
+}
+async function trackAction(id, act, btn) {
+  const list = (await DB.get('settings', 'tracked')) || [];
+  const e = list.find(x => x.id === id);
+  if (!e) return;
+  if (act === 'del') {
+    if (!confirm('Remove this track record? Its history cannot be rebuilt with the same freeze date.')) return;
+    await DB.put('settings', 'tracked', list.filter(x => x.id !== id));
+    renderTrackList(); return;
+  }
+  if (act === 'load') {
+    await selectDataset(e.dsKey).catch(() => {});
+    applyFiltersToUI(e.opts.filters);
+    loadParamsIntoStrategy(e.stratId, e.params, 'Tracked config');
+    return;
+  }
+  if (act === 'refresh') {
+    if (e.meta.demo) { btn.textContent = 'Demo data — nothing to refresh'; return; }
+    btn.textContent = 'Refreshing…'; btn.disabled = true;
+    try {
+      const rec = await DB.get('datasets', e.dsKey);
+      const depth = Math.min(HARD_CAP, (rec ? rec.bars.length : 500) + 60);
+      const res = await fetchREST(e.meta.exchange, e.meta.symbol, e.meta.tf, depth, null);
+      const cleaned = BT.cleanBars(res.bars);
+      if (cleaned.bars.length < 10) throw { cause: 'EMPTY' };
+      await DB.put('datasets', e.dsKey, { meta: { ...e.meta, fetchedAt: Date.now(), source: 'rest', dropped: cleaned.dropped }, bars: cleaned.bars });
+      if (S.selectedKey === e.dsKey) await selectDataset(e.dsKey);
+      renderTrackList();
+    } catch (err) { btn.textContent = 'Refresh failed — try the Data tab'; btn.disabled = false; }
+  }
+}
+function applyFiltersToUI(filters) {                                             /* [DR-75] mirror a filter object into the toggles */
+  const setTog = (id, label, on) => { const b = $('#' + id); b.classList.toggle('on', !!on); b.textContent = label + ': ' + (on ? 'ON' : 'off'); };
+  setTog('fSlopeOn', 'Slope', filters && filters.slope);
+  setTog('fAdxOn', 'ADX', filters && filters.adx);
+  setTog('fVwapOn', 'VWAP', filters && filters.vwap);
+  setTog('fLevelOn', 'Level', filters && filters.level);
+  if (filters && filters.slope) { $('#fSlopeType').value = filters.slope.type || 'SMA'; $('#fSlopeLen').value = filters.slope.len; $('#fSlopeK').value = filters.slope.k; }
+  if (filters && filters.adx) { $('#fAdxLen').value = filters.adx.len; $('#fAdxMin').value = filters.adx.min; }
+  if (filters && filters.vwap) { $('#fVwapLen').value = filters.vwap.len; }
+  if (filters && filters.level) { $('#fLevelType').value = filters.level.type || 'SMA'; $('#fLevelLen').value = filters.level.len; }
+}
+let scCancelled = false;
+async function runScan() {
+  const status = $('#scStatus');
+  const exId = $('#scExSel').value;
+  const profIds = $$('#scProfiles .chip-on').map(b => b.dataset.chip);
+  const profs = SCAN_PROFILES.filter(p => profIds.includes(p.id));
+  if (!profs.length) { status.innerHTML = '<div class="errline">✕ &nbsp;Pick at least one profile.</div>'; return; }
+  const extra = $('#scExtra').value.split(',').map(s => normalizeSymbol(s)).filter(Boolean);
+  const syms = [...new Set([...SC_UNIVERSE[exId], ...extra])];
+  scCancelled = false;
+  $('#scRunBtn').style.display = 'none'; $('#scCancelBtn').style.display = '';
+  $('#scCancelBtn').onclick = () => { scCancelled = true; };
+  const rows = [], errs = [];
+  for (let i = 0; i < syms.length; i++) {
+    if (scCancelled) break;
+    status.innerHTML = `<span class="spin"></span>&nbsp; ${syms[i]} — ${i + 1} / ${syms.length}…`;
+    try {
+      const res = await fetchREST(exId, syms[i], '1d', 500, null);
+      const cleaned = BT.cleanBars(res.bars);
+      if (cleaned.bars.length < 260) throw { cause: 'EMPTY' };
+      for (const p of profs) {
+        const cfg = p.current ? currentSetup() : p;
+        const filters = p.current ? cfg.opts.filters : p.filters;
+        let st = null, yr = null;
+        try { st = BT.signalState(cleaned.bars, cfg.stratId, cfg.params, filters); } catch (err) { continue; }
+        try {
+          const from = Math.max(1, cleaned.bars.length - 365);
+          const o = BT.runOOS(cleaned.bars, from, cleaned.bars.length, cfg.stratId, cfg.params, { feePct: 0.1, capital: 10000, barsPerYear: 365, filters });
+          yr = { ret: o.metrics.totalReturn, bench: o.bench };
+        } catch (err) { /* not enough history for a fair year window */ }
+        rows.push({ sym: syms[i], prof: p.name, st, yr });
+      }
+    } catch (e) { errs.push(syms[i] + ' (' + ((e && e.cause) || 'ERROR') + ')'); }
+  }
+  $('#scRunBtn').style.display = ''; $('#scCancelBtn').style.display = 'none';
+  const score = (r) => r.st.action ? 0 : (r.st.gate && !r.st.gate.above && Math.abs(r.st.gate.dist) < 0.03 ? 1 : (r.st.pos ? 2 : 3));
+  rows.sort((a, b) => (score(a) - score(b)) || (a.st.barsSince - b.st.barsSince));
+  status.innerHTML = scCancelled ? 'Scan cancelled — partial results below.' :
+    `${rows.length} symbol×profile states${errs.length ? ' · unreachable: ' + errs.join(', ') : ''}. Fresh signals rank first, then near-gate setups, then held positions.`;
+  $('#scResults').innerHTML = rows.length ? `
+    <div class="card scrollx" style="padding:6px 10px">
+    <table><thead><tr><th>Symbol</th><th>Profile</th><th>Signal</th><th>Gate</th><th>Regime</th><th>1y vs B&amp;H</th></tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td><b>${r.sym.split('/')[0]}</b></td>
+        <td>${r.prof}</td>
+        <td>${stateBadge(r.st)}</td>
+        <td>${r.st.gate ? '<span class="' + (r.st.gate.above ? 'pos' : 'neg') + '">' + fmtPct(r.st.gate.dist) + '</span>' : '—'}</td>
+        <td>${r.st.regime ? REGIME_TAG[r.st.regime] : '—'}</td>
+        <td>${r.yr ? '<span class="' + (r.yr.ret >= r.yr.bench ? 'pos' : 'neg') + '">' + fmtPct(r.yr.ret) + ' / ' + fmtPct(r.yr.bench) + '</span>' : '—'}</td></tr>`).join('')}</tbody></table>
+    </div>
+    <p class="hint">Signal state is computed on ~500 fresh daily candles per symbol. “1y vs B&amp;H” is context, not validation — these profiles were validated on BTC/ETH only [DR-70, DR-72]; treat other symbols as HYPOTHESES until they build a forward record. A gate reading just below 0% is a watchlist candidate: one strong close could unblock entries. [DR-75]</p>` : '';
+}
 /* ---------------- settings: self-test [DR-37], proxy, data mgmt ---------------- */
 async function selfTest() {
   const out = $('#selfTestOut');
@@ -2529,6 +2850,9 @@ async function boot() {
       b.textContent = label + ': ' + (b.classList.contains('on') ? 'ON' : 'off');
     };
   }
+  $('#scProfiles').innerHTML = SCAN_PROFILES.map(p =>                            /* [DR-75] */
+    `<button class="mini${p.id !== 'current' ? ' chip-on' : ''}" data-chip="${p.id}" title="${p.desc}">${p.name}</button>`).join('');
+  $('#scRunBtn').onclick = runScan;
   $('#selfTestBtn').onclick = selfTest;
   $('#proxySave').onclick = async () => {
     let v = $('#proxyIn').value.trim();
