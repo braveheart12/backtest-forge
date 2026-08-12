@@ -343,14 +343,15 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     return out;
   }
-  function kama(src, p) {                                                        // ER window p, fixed 2/30 constants [DR-40]
+  function kama(src, p) {                                                        // ER window p, fixed 2/30 constants; rolling O(n) [DR-40, DR-43]
     const n = src.length, out = new Float64Array(n).fill(NaN);
     const fast = 2 / (2 + 1), slow = 2 / (30 + 1);
     if (p + 1 > n) return out;
+    let vol = 0;
+    for (let j = 1; j <= p; j++) vol += Math.abs(src[j] - src[j - 1]);
     let k = src[p]; out[p] = k;
     for (let i = p + 1; i < n; i++) {
-      let vol = 0;
-      for (let j = i - p + 1; j <= i; j++) vol += Math.abs(src[j] - src[j - 1]);
+      vol += Math.abs(src[i] - src[i - 1]) - Math.abs(src[i - p] - src[i - p - 1]);
       const er = vol > 0 ? Math.abs(src[i] - src[i - p]) / vol : 0;
       const sc = Math.pow(er * (fast - slow) + slow, 2);
       k = k + sc * (src[i] - k); out[i] = k;
@@ -713,7 +714,14 @@ self.onmessage = function (e) {
           } catch (err) { return { params: r.params, m: r.m, oos: null }; }
         });
       }
-      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, ms: performance.now() - t0 });
+      const Cis = BT.colsFromBars(isBars);
+      const benchIS = Cis.c[Cis.n - 1] / Cis.c[0] - 1;                    /* [DR-44, close-basis DR-35] */
+      let benchOOS = null;
+      if (split < m.bars.length) {
+        const Co = BT.colsFromBars(m.bars.slice(split));
+        benchOOS = Co.c[Co.n - 1] / Co.c[0] - 1;
+      }
+      self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, ms: performance.now() - t0 });
     }
   } catch (err) { self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) }); }
 };`;
@@ -1330,7 +1338,7 @@ function sweepGrids() {
     grids[row.dataset.sw] = vals;
     combos *= vals.length;
   }
-  if (combos > 1000) return { err: `${combos.toLocaleString()} combinations is too many — max 1,000. Widen the steps.` };
+  if (combos > 10000) return { err: `${combos.toLocaleString()} combinations is too many — max 10,000. Widen the steps or drop some MA types.` };  /* [DR-43] */
   return { grids, combos };
 }
 async function runSweep() {
@@ -1343,7 +1351,8 @@ async function runSweep() {
   const useOOS = $('#swOOS').classList.contains('on');                           /* [DR-42] */
   const opts = { feePct: +$('#feeIn').value, slipPct: +$('#slipIn').value, capital: +$('#capIn').value, barsPerYear: BT.barsPerYear(BT.TF_SECONDS[S.meta.tf]), sortKey };
   $('#swRunBtn').style.display = 'none'; $('#swCancelBtn').style.display = ''; $('#swProg').style.display = '';
-  $('#swStatus').textContent = `0 / ${g.combos} combinations…`;
+  $('#swStatus').textContent = `0 / ${g.combos.toLocaleString()} combinations…` +
+    (g.combos > 2000 ? ' Large sweep — this can take a little while on a phone; Cancel any time.' : '');  /* [DR-43] */
   S.sweepWorker = makeWorker();
   const t0 = performance.now();
   let cancelled = false;
@@ -1358,30 +1367,51 @@ async function runSweep() {
     endSweep();
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     const lbl = METRIC_LABEL[sortKey];
+    /* vs Buy & Hold [DR-44] */
+    const beatsIS = (r) => r.m.totalReturn > res.benchIS;
+    const beatsOOS = (r) => r.oos != null && res.benchOOS != null && r.oos.totalReturn > res.benchOOS;
+    const beats = (r) => useOOS ? (beatsIS(r) && beatsOOS(r)) : beatsIS(r);
+    const nIS = res.results.filter(beatsIS).length, nBoth = res.results.filter(beats).length;
     $('#swStatus').textContent = `${res.results.length} valid results in ${secs}s — ranked by ${lbl}${useOOS ? ' on the first 70%; “OOS” columns show the untouched last 30%' : ''}. Degenerate combos (fast ≥ slow) skipped.`;
-    $('#swResults').innerHTML = `
+    let filterOn = false;
+    const renderSwTable = () => {
+      const shown = (filterOn ? res.results.filter(beats) : res.results).slice(0, 50);
+      $('#swResults').innerHTML = `
+      <div class="card" id="swBench" style="padding:12px 14px">
+        <b>Buy &amp; Hold same window${useOOS ? 's' : ''}:</b>
+        <span class="${res.benchIS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchIS)}</span> in-sample${useOOS ? ` · <span class="${res.benchOOS >= 0 ? 'pos' : 'neg'}">${fmtPct(res.benchOOS)}</span> out-of-sample` : ''}.
+        <div class="hint">${nIS} of ${res.results.length} combos beat it in-sample${useOOS ? `; <b>${nBoth} beat it in both windows</b> — those are the only ones worth a second look` : ''}. ✓ marks a return that beats B&amp;H (note: strategy returns pay fees, B&amp;H here doesn’t — so ✓ is the harder test).</div>
+        <button class="mini toggle${filterOn ? ' on' : ''}" id="swFilter" type="button" style="margin-top:8px">${filterOn ? `Showing only B&amp;H beaters (${useOOS ? nBoth : nIS})` : 'Show only combos that beat Buy & Hold'}</button>
+      </div>
+      ${shown.length === 0 ? '<div class="empty"><p>Nothing beat Buy &amp; Hold' + (useOOS ? ' in both windows' : '') + ' — on this data, holding wins. That is a finding, not a failure.</p></div>' : `
       <div class="card scrollx" style="padding:6px 10px">
       <table><thead><tr><th>Params</th><th>${lbl}</th><th>Return</th>${useOOS ? `<th>OOS ${lbl}</th><th>OOS Ret</th>` : '<th>Max DD</th>'}<th>Trades</th></tr></thead>
-      <tbody>${res.results.slice(0, 50).map(r => `
+      <tbody>${shown.map(r => `
         <tr class="tap" data-p='${JSON.stringify(r.params)}'>
           <td>${Object.entries(r.params).map(([k, v]) => (k === 'type' ? v : k + ' ' + v)).join(' · ')}</td>
           <td><b style="color:var(--ink)">${fmtM(sortKey, r.m[sortKey])}</b></td>
-          <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}</td>
+          <td class="${r.m.totalReturn >= 0 ? 'pos' : 'neg'}">${fmtPct(r.m.totalReturn)}${beatsIS(r) ? ' ✓' : ''}</td>
           ${useOOS ? `<td>${fmtM(sortKey, r.oos && r.oos[sortKey])}</td>
-          <td class="${r.oos && r.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${r.oos ? fmtPct(r.oos.totalReturn) : '—'}</td>`
+          <td class="${r.oos && r.oos.totalReturn >= 0 ? 'pos' : 'neg'}">${r.oos ? fmtPct(r.oos.totalReturn) + (beatsOOS(r) ? ' ✓' : '') : '—'}</td>`
           : `<td class="neg">${fmtPctU(r.m.maxDrawdown)}</td>`}
           <td>${r.m.trades}</td></tr>`).join('')}</tbody></table>
-      </div>
+      </div>`}
       <p class="hint">${useOOS
         ? 'In-sample columns are the fit; <b>OOS columns are the honest test</b> — parameters that shine in-sample but collapse out-of-sample are overfit. Tap a row to load its parameters.'
         : 'Tap a row to load its parameters. Careful: the top row is the best <i>past</i> fit — that’s optimism, not a promise (overfitting). Turn on the out-of-sample check for an honest test.'}</p>`;
-    $$('#swResults tr.tap').forEach(tr => tr.onclick = () => {
-      const p = JSON.parse(tr.dataset.p);
-      $('#stratSel').value = stratId; renderParams();
-      for (const [k, v] of Object.entries(p)) { const inp = $(`#paramBox [data-param="${k}"]`); if (inp) inp.value = v; }
-      validateParams(); nav('strat');
-      $('#runStatus').innerHTML = '<div class="okline">✓ &nbsp;Sweep parameters loaded — hit Run backtest.</div>';
-    });
+      $('#swFilter').onclick = () => { filterOn = !filterOn; renderSwTable(); };
+      wireSwRows();
+    };
+    const wireSwRows = () => {
+      $$('#swResults tr.tap').forEach(tr => tr.onclick = () => {
+        const p = JSON.parse(tr.dataset.p);
+        $('#stratSel').value = stratId; renderParams();
+        for (const [k, v] of Object.entries(p)) { const inp = $(`#paramBox [data-param="${k}"]`); if (inp) inp.value = v; }
+        validateParams(); nav('strat');
+        $('#runStatus').innerHTML = '<div class="okline">✓ &nbsp;Sweep parameters loaded — hit Run backtest.</div>';
+      });
+    };
+    renderSwTable();
   } catch (e) {
     if (!cancelled) { endSweep(); warn.innerHTML = `<div class="errline">✕ &nbsp;Sweep failed: ${e.message}</div>`; }
   }
