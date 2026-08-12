@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.1</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v3.2</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -195,10 +195,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <p class="note" style="margin-bottom:4px">Optional gates ANDed onto the position signal — when a gate is off-side the strategy stays (or goes) flat. Applied identically in backtests, sweeps and walk-forward.</p>
     <div class="row" style="margin-top:8px">
       <button class="mini toggle" id="fSlopeOn" type="button" style="min-width:104px">Slope: off</button>
-      <div style="flex:1"><label class="f" style="margin-top:0">SMA len</label><input type="number" id="fSlopeLen" value="200" min="10" max="400" inputmode="numeric"></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">MA type</label><select id="fSlopeType"><option>SMA</option><option>EMA</option><option>WMA</option><option selected>HMA</option><option>RMA</option><option>DEMA</option><option>TEMA</option><option>ZLEMA</option><option>VWMA</option><option>KAMA</option></select></div>
+      <div style="flex:1"><label class="f" style="margin-top:0">Length</label><input type="number" id="fSlopeLen" value="50" min="10" max="400" inputmode="numeric"></div>
       <div style="flex:1"><label class="f" style="margin-top:0">Rising over</label><input type="number" id="fSlopeK" value="20" min="2" max="100" inputmode="numeric"></div>
     </div>
-    <div class="hint">Only long while the SMA is rising — validated on 2010-26 BTC: cuts deep-bear bleed, costs late entries in V-recoveries.</div>
+    <div class="hint">Only long while the chosen MA is rising. Evidence (WFA OOS, Binance 2020+): <b>fast HMA/TEMA-50 robustly helps ETH</b> across 5/8/12 windows; no config helped BTC (lone spikes only) — per-asset choice. [DR-65]</div>
     <div class="row" style="margin-top:10px">
       <button class="mini toggle" id="fAdxOn" type="button" style="min-width:104px">ADX: off</button>
       <div style="flex:1"><label class="f" style="margin-top:0">ADX len</label><input type="number" id="fAdxLen" value="14" min="5" max="50" inputmode="numeric"></div>
@@ -333,7 +334,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.1</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v3.2</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -456,6 +457,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     return out;
   }
   const MA_TYPES = ['SMA', 'EMA', 'WMA', 'HMA', 'RMA', 'DEMA', 'TEMA', 'ZLEMA', 'VWMA', 'KAMA'];  /* [DR-40] */
+  const MA_WARM_MULT = { SMA: 1, WMA: 1, VWMA: 1, EMA: 1, RMA: 1, ZLEMA: 1.5, HMA: 1.2, KAMA: 1.2, DEMA: 2, TEMA: 3 };  /* [DR-57, DR-65] */
   function maOf(type, C, p) {
     switch (type) {
       case 'SMA': return sma(C.c, p);   case 'EMA': return ema(C.c, p);
@@ -569,10 +571,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       params: [{ key: 'type', label: 'MA type', type: 'select', options: MA_TYPES, def: 'SMA' },  /* [DR-40] */
                { key: 'fast', label: 'Fast period', def: 20, min: 2, max: 200, step: 1 },
                { key: 'slow', label: 'Slow period', def: 50, min: 3, max: 400, step: 1 }],
-      warmup: (p) => {                                    // type-aware [DR-57]: chained MAs need longer heads
-        const mult = { SMA: 1, WMA: 1, VWMA: 1, EMA: 1, RMA: 1, ZLEMA: 1.5, HMA: 1.2, KAMA: 1.2, DEMA: 2, TEMA: 3 }[p.type] || 3;
-        return Math.ceil(Math.max(p.fast, p.slow) * mult) + 10;
-      },
+      warmup: (p) => Math.ceil(Math.max(p.fast, p.slow) * (MA_WARM_MULT[p.type] || 3)) + 10,   /* [DR-57] */
       signals: (C, p) => {
         const f = maOf(p.type, C, p.fast), s = maOf(p.type, C, p.slow), out = new Int8Array(C.n);
         for (let i = 0; i < C.n; i++) out[i] = (isFinite(f[i]) && isFinite(s[i]) && f[i] > s[i]) ? 1 : 0;
@@ -858,7 +857,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   BT.filterWarmup = function (filters) {
     if (!filters) return 0;
     let w = 0;
-    if (filters.slope) w = Math.max(w, filters.slope.len + filters.slope.k);
+    if (filters.slope) w = Math.max(w, Math.ceil(filters.slope.len * (MA_WARM_MULT[filters.slope.type || 'SMA'] || 3)) + filters.slope.k);  /* [DR-65] */
     if (filters.adx) w = Math.max(w, filters.adx.len * 3);
     if (filters.vwap) w = Math.max(w, filters.vwap.len);
     return w;
@@ -867,7 +866,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     if (!filters || (!filters.slope && !filters.adx && !filters.vwap)) return null;
     const n = C.n, mask = new Int8Array(n).fill(1);
     if (filters.slope) {
-      const s = sma(C.c, filters.slope.len), k = filters.slope.k;
+      const s = maOf(filters.slope.type || 'SMA', C, filters.slope.len), k = filters.slope.k;   /* [DR-65] any MA type */
       for (let i = 0; i < n; i++) mask[i] &= (i >= k && isFinite(s[i]) && isFinite(s[i - k]) && s[i] - s[i - k] > 0) ? 1 : 0;
     }
     if (filters.adx) {
@@ -1610,7 +1609,7 @@ function currentOpts() {                                 /* shared by run + swee
       : { mode: 'full' },                               /* [DR-53] */
     filters: (() => {                                    /* [DR-56] */
       const f = {};
-      if ($('#fSlopeOn').classList.contains('on')) f.slope = { len: +$('#fSlopeLen').value || 200, k: +$('#fSlopeK').value || 20 };
+      if ($('#fSlopeOn').classList.contains('on')) f.slope = { type: $('#fSlopeType').value || 'SMA', len: +$('#fSlopeLen').value || 50, k: +$('#fSlopeK').value || 20 };  /* [DR-65] */
       if ($('#fAdxOn').classList.contains('on')) f.adx = { len: +$('#fAdxLen').value || 14, min: +$('#fAdxMin').value || 20 };
       if ($('#fVwapOn').classList.contains('on')) f.vwap = { len: +$('#fVwapLen').value || 50 };
       return Object.keys(f).length ? f : null;
@@ -1850,7 +1849,7 @@ function renderResults() {
         if (o.maxDDStopPct) bits.push('CB ' + o.maxDDStopPct + '%');
         const ex = bits.length ? 'exits: ' + bits.join(' / ') : 'exits: none';
         const fl = o.filters ? ' · filters: ' + [
-          o.filters.slope && `slope(${o.filters.slope.len}/${o.filters.slope.k})`,
+          o.filters.slope && `slope(${o.filters.slope.type || 'SMA'} ${o.filters.slope.len}/${o.filters.slope.k})`,
           o.filters.adx && `ADX(${o.filters.adx.len})>${o.filters.adx.min}`,
           o.filters.vwap && `VWAP(${o.filters.vwap.len})`,
         ].filter(Boolean).join(' + ') : ' · filters: none';
