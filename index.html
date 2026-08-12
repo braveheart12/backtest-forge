@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.7</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v2.8</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -271,6 +271,15 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <option value="none">None — in-sample only (least honest)</option>
     </select>
     <div class="hint" id="swValHint"></div>
+    <div id="swWinBox" style="display:none">
+      <label class="f">Walk-forward windows</label>
+      <select id="swWin">
+        <option value="5" selected>5 — longer segments, smoother stitch</option>
+        <option value="8">8 — balance</option>
+        <option value="12">12 — most re-fits, best stability evidence</option>
+      </select>
+      <div class="hint">Robustness test: run 5 and 12 — if the winners and verdict agree across window counts, the result is real. [DR-60]</div>
+    </div>
     <div id="swWarn"></div>
     <button class="btn" id="swRunBtn">Run sweep</button>
     <button class="btn danger" id="swCancelBtn" style="display:none">Cancel sweep</button>
@@ -307,7 +316,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.7</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v2.8</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -973,9 +982,22 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     }
     return best ? best.r : results[0];
   };
-  BT.walkForward = function (bars, stratId, grids, opts, nWin, minTrain, onProg) {   /* [DR-45] */
-    nWin = nWin || 5; minTrain = minTrain == null ? 0.4 : minTrain;
-    const n = bars.length, start = Math.floor(n * minTrain);
+  BT.gridWarmup = function (stratId, grids, opts) {                              /* [DR-60] max warmup across a grid */
+    const strat = BT.strategy(stratId);
+    let gw = BT.filterWarmup(opts && opts.filters);
+    const keys = Object.keys(grids);
+    (function rec(idx, acc) {
+      if (idx === keys.length) { gw = Math.max(gw, strat.warmup(acc)); return; }
+      for (const v of grids[keys[idx]]) { acc[keys[idx]] = v; rec(idx + 1, acc); }
+    })(0, {});
+    return gw;
+  };
+  BT.walkForward = function (bars, stratId, grids, opts, nWin, minTrain, onProg) {   /* [DR-45, DR-60] */
+    nWin = nWin || 5;
+    const n = bars.length;
+    const start = minTrain != null
+      ? Math.floor(n * minTrain)
+      : Math.min(Math.max(Math.floor(n * 0.25), BT.gridWarmup(stratId, grids, opts) + 250), Math.floor(n * 0.6));  /* adaptive [DR-60] */
     const segLen = Math.floor((n - start) / nWin);
     const windows = [];
     let stitched = 1, stitchedBench = 1;
@@ -991,7 +1013,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       windows.push({ from: bars[s][0], to: bars[e - 1][0], params: best.params, is: best.m, oos: oos.metrics, bench: oos.bench });
     }
     const sets = new Set(windows.filter(Boolean).map(w => JSON.stringify(w.params)));
-    return { windows, stitched: stitched - 1, stitchedBench: stitchedBench - 1, distinctParams: sets.size, nWin, start, segLen };
+    return { windows, stitched: stitched - 1, stitchedBench: stitchedBench - 1, distinctParams: sets.size, nWin, start, segLen, oosFrac: (n - start) / n };
   };
 
   /* ---------- deterministic demo data [DR-22] ---------- */
@@ -1141,10 +1163,11 @@ self.onmessage = function (e) {
                  cells: sw.results.map(r => [r.params.type || '', r.params[numKeys[0]], r.params[numKeys[1]], r.m[m.opts.sortKey || 'sharpe']]) };
       }
       self.postMessage({ id: m.id, ok: true, kind: 'sweep', results, total: sw.total, split, benchIS, benchOOS, trialStats, heat, ms: performance.now() - t0 });
-    } else if (m.cmd === 'wfa') {                        /* [DR-45] */
+    } else if (m.cmd === 'wfa') {                        /* [DR-45, DR-60] */
       const t0 = performance.now();
-      const wf = BT.walkForward(m.bars, m.stratId, m.grids, m.opts, 5, 0.4,
-        (w, d, t) => self.postMessage({ id: m.id, kind: 'progress', done: w * t + d, total: 5 * t }));
+      const nW = m.nWin || 5;
+      const wf = BT.walkForward(m.bars, m.stratId, m.grids, m.opts, nW, null,
+        (w, d, t) => self.postMessage({ id: m.id, kind: 'progress', done: w * t + d, total: nW * t }));
       self.postMessage({ id: m.id, ok: true, kind: 'wfa', wf, ms: performance.now() - t0 });
     }
   } catch (err) { self.postMessage({ id: m.id, ok: false, error: String(err && err.message || err) }); }
@@ -1929,8 +1952,9 @@ async function runSweep() {
   const fmtM = (key, v) => v == null ? '—' : (key === 'totalReturn' || key === 'cagr') ? fmtPct(v) : fmtNum(v);
   try {
     if (valMode === 'wfa') {                                                     /* [DR-45] */
-      const res = await workerCall(S.sweepWorker, { cmd: 'wfa', bars: S.bars, stratId, grids: g.grids, opts },
-        (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `Walk-forward: window ${Math.min(5, Math.floor(done / (total / 5)) + 1)} of 5…`; });
+      const nWin = +$('#swWin').value || 5;                                      /* [DR-60] */
+      const res = await workerCall(S.sweepWorker, { cmd: 'wfa', bars: S.bars, stratId, grids: g.grids, opts, nWin },
+        (done, total) => { $('#swProg i').style.width = (done / total * 100) + '%'; $('#swStatus').textContent = `Walk-forward: window ${Math.min(nWin, Math.floor(done / (total / nWin)) + 1)} of ${nWin}…`; });
       if (cancelled) return;
       endSweep();
       const wf = res.wf, secs = ((performance.now() - t0) / 1000).toFixed(1);
@@ -1955,7 +1979,7 @@ async function runSweep() {
         }
         spreadNote = (modal ? `${modal} won ${counts[modal]} of ${wins.length} windows` : 'no MA type dimension') + (spreads.length ? `; winner ranges: ${spreads.join(', ')}` : '');
       }
-      $('#swStatus').textContent = `Walk-forward done in ${secs}s — grid re-fit ${wf.nWin}× on expanding history; each window's PLATEAU pick (best 3×3-neighborhood median, not the raw #1 cell) tested on the next unseen window. [DR-59]`;
+      $('#swStatus').textContent = `Walk-forward done in ${secs}s — grid re-fit ${wf.nWin}× on expanding history; each window's PLATEAU pick (best 3×3-neighborhood median, not the raw #1 cell) tested on the next unseen window. OOS covers the last ${(wf.oosFrac * 100).toFixed(0)}% of your data (${wf.segLen}-bar segments). [DR-59, DR-60]`;
       $('#swResults').innerHTML = `
         <div class="card" id="swBench" style="padding:12px 14px">
           <b>Stitched out-of-sample:</b> <span class="${wf.stitched >= 0 ? 'pos' : 'neg'}">${fmtPct(wf.stitched)}</span>
@@ -2121,7 +2145,10 @@ async function boot() {
     wfa: 'The grid is re-optimized 5 times on expanding history; each winner is tested only on the next unseen window. Stitched OOS return + parameter stability = the strongest overfitting test this side of a research paper.',
     none: 'Every result is an in-sample fit. Fine for exploring, meaningless as evidence.',
   };
-  $('#swVal').onchange = () => { $('#swValHint').textContent = VAL_HINTS[$('#swVal').value]; };
+  $('#swVal').onchange = () => {
+    $('#swValHint').textContent = VAL_HINTS[$('#swVal').value];
+    $('#swWinBox').style.display = $('#swVal').value === 'wfa' ? '' : 'none';    /* [DR-60] */
+  };
   $('#swVal').onchange();
   $('#sizeMode').onchange = () => { $('#atrBox').style.display = $('#sizeMode').value === 'atr' ? '' : 'none'; };
   for (const [id, label] of [['fSlopeOn', 'Slope'], ['fAdxOn', 'ADX'], ['fVwapOn', 'VWAP']]) {   /* [DR-56] */
