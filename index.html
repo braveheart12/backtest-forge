@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v5.0</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v5.1</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -480,7 +480,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v5.0</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v5.1</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -489,7 +489,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
-  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v5.0M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v5.1M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
@@ -2004,9 +2004,10 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   BT.panelInit = function (cfg) {
     return {
       cfg: Object.assign({ families: MA_TYPES, fast: [10, 20, 30, 40, 50], slow: [40, 60, 90, 120, 160, 200],
-                           feePct: 0.1, maxBars: 1600, minAssetsPerDay: 8 }, cfg),
+                           feePct: 0.1, maxBars: 1600, minAssetsPerDay: 8,
+                           maxBhDay: 3, winsor: 0.5 }, cfg),                     /* [DR-89] panel hygiene */
       acc: new Map(),                                        // family -> Map(dayKey -> [sumExcess, count])
-      perAsset: [], skipped: [],
+      perAsset: [], skipped: [], droppedDays: 0, winsorized: 0,
     };
   };
   BT.panelAddAsset = function (st, sym, barsIn, tier) {
@@ -2019,6 +2020,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     if (C.n - warm < 400) { st.skipped.push(sym + ' (' + (C.n - warm) + ' usable bars)'); return { sym, skipped: true }; }
     const bhTot = C.c[C.n - 1] / C.c[warm] - 1;
     const entry = { sym, tier, bhTot, fams: {} };
+    const badDay = new Uint8Array(C.n);                      /* [DR-89] flash prints: ±300% B&H days are data errors */
+    for (let i = warm + 1; i < C.n; i++) {
+      const bd = C.c[i] / C.c[i - 1] - 1;
+      if (Math.abs(bd) > cfg.maxBhDay) { badDay[i] = 1; st.droppedDays++; }
+    }
     for (const fam of cfg.families) {
       const edges = [];
       const exDay = new Float64Array(C.n);
@@ -2036,9 +2042,13 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       let m = st.acc.get(fam);
       if (!m) { m = new Map(); st.acc.set(fam, m); }
       for (let i = warm + 1; i < C.n; i++) {
+        if (badDay[i]) continue;                             /* [DR-89] drop flash-print days for this asset */
         const key = Math.floor(C.ts[i] / 86400000);
+        let v = exDay[i] / nCombo;
+        if (v > cfg.winsor) { v = cfg.winsor; st.winsorized++; }                 /* [DR-89] winsorize ±50%/day */
+        else if (v < -cfg.winsor) { v = -cfg.winsor; st.winsorized++; }
         const e = m.get(key) || [0, 0];
-        e[0] += exDay[i] / nCombo; e[1]++;
+        e[0] += v; e[1]++;
         m.set(key, e);
       }
     }
@@ -2081,6 +2091,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     const joint = BT.spaTest(seriesM, new Float64Array(dayKeys.length), 200, 13);   // best family vs zero after searching all
     const deadBH = st.perAsset.filter(a => a.tier === 'dead').map(a => a.bhTot).sort((a, b) => a - b);
     return { rows, nAssets: st.perAsset.length, nDays: dayKeys.length, skipped: st.skipped, joint,
+             droppedDays: st.droppedDays, winsorized: st.winsorized,             /* [DR-89] hygiene counters */
              deadStats: deadBH.length ? { n: deadBH.length, medianBH: deadBH[Math.floor((deadBH.length - 1) / 2)] } : null };
   };
 
@@ -4170,7 +4181,7 @@ async function runPanelLab() {
     const res = await workerCall(worker, { cmd: 'panelFinish' });
     const out = res.out;
     endLab();
-    status.textContent = `${disc.length} pairs discovered ≥ $${(minVol / 1e6)}M · ${out.nAssets} entered the panel (${deadN} delisted)${shortGrid ? ' · SHORT grid (slow ≤120, ~2.1y min)' : ''} · ${out.nDays.toLocaleString()} panel days · skipped: ${young} too young, ${out.skipped.length} under the ${shortGrid ? '~770' : '~1,010'}-bar grid minimum, ${fetchFail} unreachable${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
+    status.textContent = `${disc.length} pairs discovered ≥ $${(minVol / 1e6)}M · ${out.nAssets} entered the panel (${deadN} delisted)${shortGrid ? ' · SHORT grid (slow ≤120, ~2.1y min)' : ''} · ${out.nDays.toLocaleString()} panel days · skipped: ${young} too young, ${out.skipped.length} under the ${shortGrid ? '~770' : '~1,010'}-bar grid minimum, ${fetchFail} unreachable · hygiene: ${out.droppedDays.toLocaleString()} flash-print asset-days dropped (±300% B&H), ${out.winsorized.toLocaleString()} winsorized at ±50%/day [DR-89]${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
     const fmtT = (x) => (x >= 0 ? '+' : '') + x.toFixed(2);
     $('#xsOut').innerHTML = `
       <div class="card" style="padding:12px 14px">
@@ -4187,10 +4198,10 @@ async function runPanelLab() {
           <td class="${r.medianEdge >= 0 ? 'pos' : 'neg'}">${fmtPct(r.medianEdge)}</td>
           <td>${fmtPctU(r.pctPos, 0)}</td>
           <td class="${r.panelT >= 1.65 ? 'pos' : ''}"><b>${fmtT(r.panelT)}</b></td>
-          <td>${r.pBoot != null ? (r.pBoot * 100).toFixed(0) + '%' : '—'}</td>
+          <td>${r.panelT > 0 && r.pBoot != null ? (r.pBoot * 100).toFixed(0) + '%' : '—'}</td>
           <td class="note">${['T1', 'T2', 'T3', 'dead'].filter(tk => r.tierMed[tk]).map(tk => fmtPct(r.tierMed[tk].median)).join(' / ')}</td></tr>`).join('')}</tbody></table>
       </div>
-      <p class="hint">Selection-free panel: each family is its ENTIRE protocol grid equal-weighted (no cell picking), each asset judged vs its own B&amp;H, each day averaged across the cross-section — so correlated alts cannot inflate t (10 BTC clones give the same t as one). Panel t ≥ 1.65 with a low bootstrap p on the RELATIVE ranking is the strongest family evidence this app can produce. Ann. excess = annualized mean of the panel series (fees included, B&amp;H frictionless). Skipped: ${out.skipped.slice(0, 6).join(', ') || failed.slice(0, 6).join(', ') || 'none'}${(out.skipped.length + failed.length) > 6 ? '…' : ''}. [DR-86]</p>`;
+      <p class="hint">Selection-free panel: each family is its ENTIRE protocol grid equal-weighted (no cell picking), each asset judged vs its own B&amp;H, each day averaged across the cross-section — so correlated alts cannot inflate t (10 BTC clones give the same t as one). Panel t ≥ 1.65 with a low bootstrap p on the RELATIVE ranking is the strongest family evidence this app can produce. Ann. excess = annualized mean of the panel series (fees included, B&amp;H frictionless), after panel hygiene: micro-cap flash prints (±300% B&amp;H days) dropped and per-asset daily excess winsorized at ±50% — without this, one +2,000% bad print on a micro-cap poisons the whole cross-sectional mean [DR-89]. p is ONE-SIDED (is the edge positive beyond luck?) — families with a non-positive panel t show “—”, not a p-value. Skipped: ${out.skipped.slice(0, 6).join(', ') || failed.slice(0, 6).join(', ') || 'none'}${(out.skipped.length + failed.length) > 6 ? '…' : ''}. [DR-86]</p>`;
   } catch (e) {
     endLab();
     status.innerHTML = `<div class="errline">✕ &nbsp;${e.message || e}${(e && e.cause) ? ' (' + e.cause + ')' : ''}</div>`;
@@ -4226,7 +4237,8 @@ async function backfillGraveyard() {
     status.innerHTML = '<span class="spin"></span>&nbsp; Fetching current symbol list (exchangeInfo)…';
     const proxy = await getProxy();
     const exInfo = await (await fetch(proxy + 'https://api.binance.com/api/v3/exchangeInfo')).json();
-    const live = new Set((exInfo.symbols || []).map(s => s.symbol));
+    // Delisted pairs REMAIN in exchangeInfo with status BREAK — only TRADING counts as alive [DR-89]
+    const live = new Set((exInfo.symbols || []).filter(s => s.status === 'TRADING').map(s => s.symbol));
     status.innerHTML = '<span class="spin"></span>&nbsp; Enumerating every pair ever listed…';
     const everDirs = [];
     let marker = null;
