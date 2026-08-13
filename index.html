@@ -117,7 +117,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 </head>
 <body>
 <div id="app">
-<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v5.1</span></h1><span id="dsBadge">no dataset</span></header>
+<header><h1>Backtest Forge <span style="font-size:11px;font-weight:500;color:var(--muted)">v5.2</span></h1><span id="dsBadge">no dataset</span></header>
 <main>
 
 <!-- ================= DATA ================= -->
@@ -480,7 +480,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn ghost" id="reseedBtn" style="margin-top:0">Restore demo datasets</button>
     <button class="btn danger" id="wipeBtn">Delete all datasets</button>
   </div>
-  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v5.1</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
+  <p class="hint" style="text-align:center">Backtest Forge <b id="appVer">v5.2</b> · long-only · data via ccxt/Binance · charts by <a href="https://www.tradingview.com/" style="color:var(--s1)">TradingView Lightweight Charts™</a> · not investment advice</p>
 </section>
 </main>
 
@@ -489,7 +489,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
   <button data-nav="strat"><svg viewBox="0 0 24 24"><path d="M4 17 9 11l4 3 7-9M4 21h16"/></svg>Strategy</button>
   <button data-nav="results"><svg viewBox="0 0 24 24"><path d="M5 21V10M12 21V4M19 21v-7"/></svg>Results</button>
   <button data-nav="sweep"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Sweep</button>
-  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v5.1M12 12l6.4-6.4"/></svg>Radar</button>
+  <button data-nav="radar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v5.2M12 12l6.4-6.4"/></svg>Radar</button>
   <button data-nav="folio"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4M12 12H3"/></svg>Folio</button>
   <button data-nav="set"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
@@ -2055,6 +2055,17 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     st.perAsset.push(entry);
     return { sym, ok: true };
   };
+  // Paired t on the DAILY DIFFERENCE of two panel series [DR-90]: families trade nearly
+  // the same days, so their level-t's compress; pairing cancels the shared payoff and
+  // exposes the true family difference.
+  BT.pairedT = function (a, b) {
+    const n = Math.min(a.length, b.length);
+    if (n < 30) return 0;
+    let s = 0, s2 = 0;
+    for (let i = 0; i < n; i++) { const d = a[i] - b[i]; s += d; s2 += d * d; }
+    const mu = s / n, v = Math.max(0, s2 / n - mu * mu), sd = Math.sqrt(v);
+    return sd > 1e-15 ? mu / (sd / Math.sqrt(n)) : 0;
+  };
   BT.panelFinish = function (st) {
     const cfg = st.cfg;
     if (!st.perAsset.length) return null;
@@ -2087,6 +2098,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
                   pctPos: medians.filter(x => x > 0).length / medians.length,
                   panelT: t, pBoot: solo ? solo.p : null, tierMed, annEx: mu * 365 });
     }
+    const refIdx = Math.max(0, cfg.families.indexOf('SMA'));                     /* [DR-90] paired contrast vs SMA reference */
+    const refSeries = seriesM[refIdx];
+    rows.forEach((r, i) => { r.tVsRef = i === refIdx ? 0 : BT.pairedT(seriesM[i], refSeries); r.refFam = cfg.families[refIdx]; });
     rows.sort((a, b) => b.panelT - a.panelT);
     const joint = BT.spaTest(seriesM, new Float64Array(dayKeys.length), 200, 13);   // best family vs zero after searching all
     const deadBH = st.perAsset.filter(a => a.tier === 'dead').map(a => a.bhTot).sort((a, b) => a - b);
@@ -4141,7 +4155,7 @@ async function runPanelLab() {
     worker = makeWorker();
     await workerCall(worker, { cmd: 'panelStart', cfg: Object.assign({ feePct: +$('#feeIn').value || 0.1 },
       shortGrid ? { slow: [40, 60, 90, 120] } : {}) });                          /* [DR-88] short grid: warm-up 370 vs 610 */
-    let done = 0, fetched = 0, cachedN = 0, young = 0, fetchFail = 0;
+    let done = 0, fetched = 0, cachedN = 0, young = 0, fetchFail = 0, stale = 0;
     const failed = [];
     for (let i = 0; i < disc.length; i++) {
       if (xsCancel) break;
@@ -4160,6 +4174,7 @@ async function runPanelLab() {
         } catch (e) { failed.push(sym); fetchFail++; continue; }
       }
       if (bars.length < (shortGrid ? 500 : 800)) { failed.push(sym + ' (young)'); young++; continue; }   /* [DR-88] */
+      if (Date.now() - bars[bars.length - 1][0] > 30 * 864e5) { failed.push(sym + ' (stale/halted)'); stale++; continue; }   /* [DR-90] zombie pairs distort the panel calendar */
       await workerCall(worker, { cmd: 'panelAsset', sym, bars, tier: tierOf(i) });
       done++;
     }
@@ -4181,7 +4196,7 @@ async function runPanelLab() {
     const res = await workerCall(worker, { cmd: 'panelFinish' });
     const out = res.out;
     endLab();
-    status.textContent = `${disc.length} pairs discovered ≥ $${(minVol / 1e6)}M · ${out.nAssets} entered the panel (${deadN} delisted)${shortGrid ? ' · SHORT grid (slow ≤120, ~2.1y min)' : ''} · ${out.nDays.toLocaleString()} panel days · skipped: ${young} too young, ${out.skipped.length} under the ${shortGrid ? '~770' : '~1,010'}-bar grid minimum, ${fetchFail} unreachable · hygiene: ${out.droppedDays.toLocaleString()} flash-print asset-days dropped (±300% B&H), ${out.winsorized.toLocaleString()} winsorized at ±50%/day [DR-89]${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
+    status.textContent = `${disc.length} pairs discovered ≥ $${(minVol / 1e6)}M · ${out.nAssets} entered the panel (${deadN} delisted)${shortGrid ? ' · SHORT grid (slow ≤120, ~2.1y min)' : ''} · ${out.nDays.toLocaleString()} panel days · skipped: ${young} too young, ${stale} stale/halted zombies [DR-90], ${out.skipped.length} under the ${shortGrid ? '~770' : '~1,010'}-bar grid minimum, ${fetchFail} unreachable · hygiene: ${out.droppedDays.toLocaleString()} flash-print asset-days dropped (±300% B&H), ${out.winsorized.toLocaleString()} winsorized at ±50%/day [DR-89]${xsCancel ? ' · CANCELLED EARLY — partial universe' : ''}.`;
     const fmtT = (x) => (x >= 0 ? '+' : '') + x.toFixed(2);
     $('#xsOut').innerHTML = `
       <div class="card" style="padding:12px 14px">
@@ -4190,7 +4205,7 @@ async function runPanelLab() {
         ${out.deadStats ? `<div class="hint" style="margin-top:6px"><b>Graveyard check:</b> median B&amp;H outcome on the ${out.deadStats.n} delisted coins was <b class="neg">${fmtPct(out.deadStats.medianBH)}</b> — the survivorship the survivor-only panel never shows. Family edges below INCLUDE these coins.</div>` : `<div class="hint" style="margin-top:6px"><b>Survivorship caveat:</b> this universe is today's survivors — absolute levels are inflated; trust the RELATIVE family ranking, and run the graveyard backfill for corrected numbers. [DR-86]</div>`}
       </div>
       <div class="card scrollx" style="padding:6px 10px">
-      <table><thead><tr><th>Family</th><th>Ann. excess</th><th>Median edge</th><th>%+ assets</th><th>Panel t</th><th>p</th><th>Tiers T1/T2/T3${out.deadStats ? '/dead' : ''}</th></tr></thead>
+      <table><thead><tr><th>Family</th><th>Ann. excess</th><th>Median edge</th><th>%+ assets</th><th>Panel t</th><th>p</th><th>t vs ${out.rows[0].refFam || 'SMA'}</th><th>Tiers T1/T2/T3${out.deadStats ? '/dead' : ''}</th></tr></thead>
       <tbody>${out.rows.map(r => `
         <tr>
           <td><b>${r.family}</b> <span class="note">×${r.nAssets}</span></td>
@@ -4199,9 +4214,10 @@ async function runPanelLab() {
           <td>${fmtPctU(r.pctPos, 0)}</td>
           <td class="${r.panelT >= 1.65 ? 'pos' : ''}"><b>${fmtT(r.panelT)}</b></td>
           <td>${r.panelT > 0 && r.pBoot != null ? (r.pBoot * 100).toFixed(0) + '%' : '—'}</td>
+          <td class="${r.tVsRef >= 1.65 ? 'pos' : (r.tVsRef <= -1.65 ? 'neg' : '')}"><b>${r.family === r.refFam ? 'ref' : fmtT(r.tVsRef)}</b></td>
           <td class="note">${['T1', 'T2', 'T3', 'dead'].filter(tk => r.tierMed[tk]).map(tk => fmtPct(r.tierMed[tk].median)).join(' / ')}</td></tr>`).join('')}</tbody></table>
       </div>
-      <p class="hint">Selection-free panel: each family is its ENTIRE protocol grid equal-weighted (no cell picking), each asset judged vs its own B&amp;H, each day averaged across the cross-section — so correlated alts cannot inflate t (10 BTC clones give the same t as one). Panel t ≥ 1.65 with a low bootstrap p on the RELATIVE ranking is the strongest family evidence this app can produce. Ann. excess = annualized mean of the panel series (fees included, B&amp;H frictionless), after panel hygiene: micro-cap flash prints (±300% B&amp;H days) dropped and per-asset daily excess winsorized at ±50% — without this, one +2,000% bad print on a micro-cap poisons the whole cross-sectional mean [DR-89]. p is ONE-SIDED (is the edge positive beyond luck?) — families with a non-positive panel t show “—”, not a p-value. Skipped: ${out.skipped.slice(0, 6).join(', ') || failed.slice(0, 6).join(', ') || 'none'}${(out.skipped.length + failed.length) > 6 ? '…' : ''}. [DR-86]</p>`;
+      <p class="hint">Selection-free panel: each family is its ENTIRE protocol grid equal-weighted (no cell picking), each asset judged vs its own B&amp;H, each day averaged across the cross-section — so correlated alts cannot inflate t (10 BTC clones give the same t as one). Panel t ≥ 1.65 with a low bootstrap p on the RELATIVE ranking is the strongest family evidence this app can produce. Ann. excess = annualized mean of the panel series (fees included, B&amp;H frictionless), after panel hygiene: micro-cap flash prints (±300% B&amp;H days) dropped and per-asset daily excess winsorized at ±50% — without this, one +2,000% bad print on a micro-cap poisons the whole cross-sectional mean [DR-89]. p is ONE-SIDED (is the edge positive beyond luck?) — families with a non-positive panel t show “—”, not a p-value. <b>Why level t's compress:</b> all families trade nearly the same days, so their panel series share one common trend payoff and differ only around turning points — the LEVEL t measures the shared payoff, while <b>t vs SMA</b> is the PAIRED t on daily differences, where the shared noise cancels: |t| ≥ 1.65 there marks a real family difference even when level t's look identical. [DR-90] Skipped: ${out.skipped.slice(0, 6).join(', ') || failed.slice(0, 6).join(', ') || 'none'}${(out.skipped.length + failed.length) > 6 ? '…' : ''}. [DR-86]</p>`;
   } catch (e) {
     endLab();
     status.innerHTML = `<div class="errline">✕ &nbsp;${e.message || e}${(e && e.cause) ? ' (' + e.cause + ')' : ''}</div>`;
@@ -4210,13 +4226,16 @@ async function runPanelLab() {
 
 /* ---------------- survivorship patch: graveyard backfill [DR-87] ---------------- */
 const VISION = 'https://data.binance.vision/';
+const VISION_S3 = 'https://s3-ap-northeast-1.amazonaws.com/data.binance.vision';   /* [DR-90] the REAL XML listing endpoint — data.binance.vision/?prefix serves an HTML page */
 async function visionList(prefix, marker) {
   const proxy = await getProxy();
-  const url = VISION + '?prefix=' + encodeURIComponent(prefix) + '&delimiter=%2F' + (marker ? '&marker=' + encodeURIComponent(marker) : '');
+  const url = VISION_S3 + '?prefix=' + encodeURIComponent(prefix) + '&delimiter=%2F' + (marker ? '&marker=' + encodeURIComponent(marker) : '');
   let r;
   try { r = await fetch(proxy + url); } catch (e) { throw { cause: classifyFetchError(e, null) }; }
   if (!r.ok) throw { cause: classifyFetchError(null, r) };
-  const xml = new DOMParser().parseFromString(await r.text(), 'text/xml');
+  const body = await r.text();
+  if (!/<ListBucketResult/i.test(body)) throw { cause: 'NOT-XML' };              /* [DR-90] HTML page ≠ listing */
+  const xml = new DOMParser().parseFromString(body, 'text/xml');
   const prefixes = [...xml.getElementsByTagName('Prefix')].map(x => x.textContent).filter(x => x !== prefix);
   const keys = [...xml.getElementsByTagName('Key')].map(x => x.textContent);
   const truncated = ((xml.getElementsByTagName('IsTruncated')[0] || {}).textContent || '') === 'true';
@@ -4249,9 +4268,10 @@ async function backfillGraveyard() {
       marker = l.next;
     }
     const uex = userExclSet();
+    if (everDirs.length < 300) { endGy(); status.innerHTML = `<div class="errline">✕ &nbsp;Archive listing looks incomplete (${everDirs.length} symbol folders — expected thousands). The listing endpoint may be blocked; try a proxy in Settings. [DR-90]</div>`; return; }
     const dead = everDirs.map(d => d.split('/').filter(Boolean).pop())
       .filter(s => s && s.endsWith('USDT') && !live.has(s) && !/(UP|DOWN|BULL|BEAR)USDT$/.test(s) && !excludedBase(s.slice(0, -4), uex));
-    if (!dead.length) { endGy(); status.innerHTML = '<div class="warnline">⚠ &nbsp;No delisted USDT pairs found in the archive listing — nothing to backfill.</div>'; return; }
+    if (!dead.length) { endGy(); status.innerHTML = `<div class="warnline">⚠ &nbsp;${everDirs.length} pairs enumerated but no delisted USDT pairs after filters — unexpected; report this. [DR-90]</div>`; return; }
     const maxRun = Math.min(+$('#gyMax').value || 60, 400);
     let cached = 0, added = 0, thin = 0, failed = 0, attempted = 0;
     for (const symRaw of dead) {
